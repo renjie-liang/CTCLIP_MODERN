@@ -111,12 +111,13 @@ def process_single_sample(
         Dict with keys: 'npy', 'json', 'txt', 'labels'
     """
 
-    # Load NPZ data (only read, don't process yet to save memory)
+    # Load NPZ data (use mmap for memory efficiency)
     npz_data = np.load(npz_path, mmap_mode='r')["data"]
 
     # Convert to float16 (this is the key space savings!)
     # Note: We store raw data here, processing will be done during training
-    volume_fp16 = npz_data.astype(np.float16)
+    # Ensure the array is C-contiguous for proper serialization
+    volume_fp16 = np.ascontiguousarray(npz_data.astype(np.float16))
 
     # Serialize volume to bytes
     volume_bytes = io.BytesIO()
