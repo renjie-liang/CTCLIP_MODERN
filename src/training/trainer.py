@@ -29,7 +29,7 @@ from transformers import BertTokenizer
 
 from ..training import get_optimizer, get_warmup_cosine_schedule
 from ..data import CTReportDataset
-from ..utils import ETACalculator
+from ..utils import ETACalculator, get_memory_info
 from ..validation import DiseaseEvaluator
 from ..checkpoint import CheckpointManager
 from ..loggers import create_logger
@@ -448,11 +448,13 @@ class CTClipTrainer(nn.Module):
                 elapsed = self.eta_calculator.get_elapsed_time()
 
                 if self.global_step % 10 == 0:
+                    memory_info = get_memory_info()
                     self.print(
                         f"Step {self.global_step}/{self.max_steps} (Epoch {current_epoch_float:.2f}) | "
                         f"Loss: {loss:.4f} | LR: {current_lr:.2e} | "
                         f"Time/Step: {avg_step_time:.2f}s | ETA: {eta} | Elapsed: {elapsed}"
                     )
+                    self.print(f"  {memory_info}")
 
                     # Log to logger
                     self.logger.log_metrics({
