@@ -108,7 +108,7 @@ def process_single_sample(
     Process a single NPZ file and return WebDataset-compatible data.
 
     Returns:
-        Dict with keys: 'npy', 'json', 'txt', 'cls'
+        Dict with keys: 'npy', 'json', 'txt', 'labels'
     """
 
     # Load NPZ data (only read, don't process yet to save memory)
@@ -148,7 +148,7 @@ def process_single_sample(
         'npy': volume_bytes,      # Volume data (float16)
         'json': metadata_bytes,   # Metadata
         'txt': report_bytes,      # Report text
-        'cls': labels_bytes       # Disease labels
+        'labels': labels_bytes    # Disease labels (use .labels to avoid auto-decoding)
     }
 
 
