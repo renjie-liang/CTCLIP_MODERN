@@ -1,20 +1,3 @@
-"""
-CT-CLIP训练脚本 V2 - 使用简洁的 CTClipTrainerV2
-
-用法:
-    # 使用默认配置
-    python train_pipeline/run_train_v2.py
-
-    # 使用自定义配置
-    python train_pipeline/run_train_v2.py --config train_pipeline/configs/experiments/debug.yaml
-
-    # 从checkpoint恢复
-    python train_pipeline/run_train_v2.py --resume saves/best_model.pt
-
-    # 指定GPU
-    CUDA_VISIBLE_DEVICES=0 python train_pipeline/run_train_v2.py
-"""
-
 import sys
 import argparse
 from pathlib import Path

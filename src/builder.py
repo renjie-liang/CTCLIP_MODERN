@@ -1,5 +1,5 @@
 
-from transformers import BertTokenizer, BertModel
+from transformers import BertTokenizer, BertModel, AutoTokenizer
 from ct_clip import CTCLIP
 from transformer_maskgit import CTViT
 from src.utils_model import safe_load_ctclip
@@ -7,13 +7,14 @@ import torch
 
 
                       
-def build_ct_clip(args, device: torch.device) -> tuple[CTCLIP, BertTokenizer]:
+def build_ct_clip(args, device: torch.device):
     """
     Build CT-CLIP + text encoder in the same spirit as generate_embeddings.py.
     We won't use the vision backbone here (we pass img_embed directly).
     """
     # text side
-    tokenizer = BertTokenizer.from_pretrained(args.biomed_bert_path, do_lower_case=True)
+    # tokenizer = BertTokenizer.from_pretrained(args.biomed_bert_path, do_lower_case=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.biomed_bert_path, do_lower_case=True)
     text_encoder = BertModel.from_pretrained(args.biomed_bert_path)
     text_encoder.resize_token_embeddings(len(tokenizer))
 

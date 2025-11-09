@@ -453,30 +453,27 @@ class CTClipTrainerV2(nn.Module):
 
             # Training loop
             for batch_idx, batch in enumerate(self.train_dataloader):
-                try:
-                    loss = self.train_step(batch, batch_idx)
-                    epoch_loss += loss
-                    num_batches += 1
+                loss = self.train_step(batch, batch_idx)
+                epoch_loss += loss
+                num_batches += 1
 
-                    # Log every 10 batches
-                    if (batch_idx + 1) % 10 == 0:
-                        avg_loss = epoch_loss / num_batches
-                        current_lr = self.optim.param_groups[0]['lr']
-                        self.print(
-                            f"Epoch {epoch+1} | Batch {batch_idx+1}/{len(self.train_dataloader)} | "
-                            f"Loss: {loss:.4f} | Avg Loss: {avg_loss:.4f} | LR: {current_lr:.2e}"
-                        )
+                # Log every 10 batches
+                if (batch_idx + 1) % 10 == 0:
+                    avg_loss = epoch_loss / num_batches
+                    current_lr = self.optim.param_groups[0]['lr']
+                    self.print(
+                        f"Epoch {epoch+1} | Batch {batch_idx+1}/{len(self.train_dataloader)} | "
+                        f"Loss: {loss:.4f} | Avg Loss: {avg_loss:.4f} | LR: {current_lr:.2e}"
+                    )
 
-                        # Log to V2 logger
-                        self.logger.log_metrics({
-                            'loss': loss,
-                            'avg_loss': avg_loss,
-                            'learning_rate': current_lr
-                        }, step=self.global_step, prefix='train')
+                    # Log to V2 logger
+                    self.logger.log_metrics({
+                        'loss': loss,
+                        'avg_loss': avg_loss,
+                        'learning_rate': current_lr
+                    }, step=self.global_step, prefix='train')
 
-                except Exception as e:
-                    self.print(f"[ERROR] Error in batch {batch_idx}: {e}")
-                    raise  # 快速失败：不继续，直接报错
+
 
             # Epoch summary
             avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0.0

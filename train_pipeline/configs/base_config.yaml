@@ -25,9 +25,9 @@ data:
 
   # DataLoader配置
   batch_size: 8
-  num_workers: 8
+  num_workers: 4
   use_embedding: false
-  embedding_dir: "./dataset/embedding"
+  embedding_dir: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/embedding/author_ckpt"
 
 # 模型配置
 model:
