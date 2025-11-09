@@ -109,85 +109,37 @@ class CTClipTrainer(nn.Module):
         self.pathologies = self._load_pathology_classes(data_cfg['labels_valid'])
         self.print(f"Loaded {len(self.pathologies)} pathology classes")
 
-        # Datasets - choose format based on config
-        dataset_format = data_cfg.get('dataset_format', 'npz')
+        # WebDataset format (using float16 for optimized I/O)
+        self.print(f"Using WebDataset format")
 
-        if dataset_format == 'webdataset':
-            print(f"Using WebDataset format for faster I/O")
+        # Training dataset
+        train_dataset = CTReportWebDataset(
+            shard_pattern=data_cfg['webdataset_shards_train'],
+            shuffle=True,
+            buffer_size=data_cfg.get('shuffle_buffer_size', 1000),
+            mode="train"
+        )
 
-            # Training dataset
-            train_dataset = CTReportWebDataset(
-                shard_pattern=data_cfg['webdataset_shards_train'],
-                shuffle=True,
-                buffer_size=data_cfg.get('shuffle_buffer_size', 1000),
-                mode="train"
-            )
+        # Validation dataset
+        val_dataset = CTReportWebDataset(
+            shard_pattern=data_cfg['webdataset_shards_val'],
+            shuffle=False,
+            buffer_size=0,
+            mode="val"
+        )
 
-            # Validation dataset
-            val_dataset = CTReportWebDataset(
-                shard_pattern=data_cfg['webdataset_shards_val'],
-                shuffle=False,
-                buffer_size=0,
-                mode="val"
-            )
+        # Create DataLoaders
+        self.train_dataloader = train_dataset.create_pytorch_dataloader(
+            batch_size=self.batch_size,
+            num_workers=data_cfg['num_workers'],
+            prefetch_factor=data_cfg.get('prefetch_factor', 2)
+        )
 
-            # WebDataset uses its own DataLoader creation
-            self.train_dataloader = train_dataset.create_pytorch_dataloader(
-                batch_size=self.batch_size,
-                num_workers=data_cfg['num_workers'],
-                prefetch_factor=data_cfg.get('prefetch_factor', 2)
-            )
-
-            self.val_dataloader = val_dataset.create_pytorch_dataloader(
-                batch_size=1,
-                num_workers=data_cfg['num_workers'],
-                prefetch_factor=data_cfg.get('prefetch_factor', 2)
-            )
-
-            # Store datasets (not used but kept for compatibility)
-            self.train_dataset = None
-            self.val_dataset = None
-
-        else:
-            print(f"Using NPZ format")
-
-            # Original NPZ datasets
-            self.train_dataset = CTReportDataset(
-                data_folder=data_cfg['train_dir'],
-                reports_file=data_cfg['reports_train'],
-                meta_file=data_cfg['train_meta'],
-                labels=data_cfg['labels_train'],
-                mode="train"
-            )
-
-            self.val_dataset = CTReportDataset(
-                data_folder=data_cfg['valid_dir'],
-                reports_file=data_cfg['reports_valid'],
-                meta_file=data_cfg['valid_meta'],
-                labels=data_cfg['labels_valid'],
-                mode="val"
-            )
-
-            # Standard PyTorch DataLoaders
-            self.train_dataloader = DataLoader(
-                self.train_dataset,
-                num_workers=data_cfg['num_workers'],
-                batch_size=self.batch_size,
-                shuffle=True,
-                pin_memory=True,
-                persistent_workers=True,
-                prefetch_factor=data_cfg.get('prefetch_factor', 2)
-            )
-
-            self.val_dataloader = DataLoader(
-                self.val_dataset,
-                num_workers=data_cfg['num_workers'],
-                batch_size=1,
-                shuffle=False,
-                pin_memory=True,
-                persistent_workers=True,
-                prefetch_factor=data_cfg.get('prefetch_factor', 2)
-            )
+        self.val_dataloader = val_dataset.create_pytorch_dataloader(
+            batch_size=1,
+            num_workers=data_cfg['num_workers'],
+            prefetch_factor=data_cfg.get('prefetch_factor', 2)
+        )
 
         # Device
         self.device = self.accelerator.device
