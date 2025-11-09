@@ -108,22 +108,21 @@ def process_single_sample(
     Process a single NPZ file and return WebDataset-compatible data.
 
     Returns:
-        Dict with keys: 'npy', 'json', 'txt', 'cls'
+        Dict with keys: 'npy', 'json', 'txt', 'labels'
     """
 
-    # Load NPZ data (only read, don't process yet to save memory)
+    # Load NPZ data (use mmap for memory efficiency)
     npz_data = np.load(npz_path, mmap_mode='r')["data"]
 
     # Convert to float16 (this is the key space savings!)
     # Note: We store raw data here, processing will be done during training
-    volume_fp16 = npz_data.astype(np.float16)
+    # Ensure the array is C-contiguous for proper serialization
+    volume_fp16 = np.ascontiguousarray(npz_data.astype(np.float16))
 
-    # Serialize volume to bytes
-    volume_bytes = io.BytesIO()
-    np.save(volume_bytes, volume_fp16)
-    volume_bytes = volume_bytes.getvalue()
+    # Serialize volume to raw bytes (more efficient than np.save, no pickle)
+    volume_bytes = volume_fp16.tobytes()
 
-    # Prepare metadata JSON
+    # Prepare metadata JSON (include shape and dtype for reconstruction)
     meta_row = meta_df.loc[study_id]
     metadata = {
         'study_id': study_id,
@@ -131,7 +130,9 @@ def process_single_sample(
         'RescaleIntercept': float(meta_row["RescaleIntercept"]),
         'XYSpacing': str(meta_row["XYSpacing"]),
         'ZSpacing': float(meta_row["ZSpacing"]),
-        'original_shape': list(npz_data.shape)
+        'original_shape': list(npz_data.shape),
+        'volume_shape': list(volume_fp16.shape),  # Shape for reconstruction
+        'volume_dtype': 'float16'  # Dtype for reconstruction
     }
     metadata_bytes = json.dumps(metadata).encode('utf-8')
 
@@ -148,7 +149,7 @@ def process_single_sample(
         'npy': volume_bytes,      # Volume data (float16)
         'json': metadata_bytes,   # Metadata
         'txt': report_bytes,      # Report text
-        'cls': labels_bytes       # Disease labels
+        'labels': labels_bytes    # Disease labels (use .labels to avoid auto-decoding)
     }
 
 

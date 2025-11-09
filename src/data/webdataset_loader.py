@@ -193,21 +193,23 @@ class CTReportWebDataset:
         """
         Decode a single sample from WebDataset.
 
-        WebDataset provides samples as dicts with keys like 'npy', 'json', 'txt', 'cls'.
+        WebDataset provides samples as dicts with keys like 'npy', 'json', 'txt', 'labels'.
         """
-        # Load volume data (stored as float16 numpy array)
-        volume_data = np.load(io.BytesIO(sample['npy']))
-
-        # Load metadata
+        # Load metadata first (contains shape info for volume reconstruction)
         metadata = json.loads(sample['json'].decode('utf-8'))
         study_id = metadata['study_id']
+
+        # Load volume data (stored as raw bytes, reconstruct from shape and dtype)
+        volume_shape = tuple(metadata['volume_shape'])
+        volume_dtype = np.dtype(metadata['volume_dtype'])
+        volume_data = np.frombuffer(sample['npy'], dtype=volume_dtype).reshape(volume_shape)
 
         # Load report text
         report_text = sample['txt'].decode('utf-8')
         report_text = self._clean_text(report_text)
 
-        # Load labels
-        labels = np.frombuffer(sample['cls'], dtype=np.float32)
+        # Load labels (binary data, decode as float32 array)
+        labels = np.frombuffer(sample['labels'], dtype=np.float32)
 
         # Process volume
         if self.use_embedding:
