@@ -363,8 +363,10 @@ class CTClipTrainer(nn.Module):
         self.print(f"{'='*80}")
 
         # Determine number of samples to evaluate
-        num_samples = self.eval_samples if self.eval_samples else len(self.val_dataloader)
-        num_samples = min(num_samples, len(self.val_dataloader))
+        # For WebDataset with batch_size=1, num_batches == num_samples
+        total_val_samples = len(self.val_dataset)
+        num_samples = self.eval_samples if self.eval_samples else total_val_samples
+        num_samples = min(num_samples, total_val_samples)
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(self.val_dataloader):
