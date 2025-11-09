@@ -193,7 +193,7 @@ class CTReportWebDataset:
         """
         Decode a single sample from WebDataset.
 
-        WebDataset provides samples as dicts with keys like 'npy', 'json', 'txt', 'labels'.
+        WebDataset provides samples as dicts with keys like 'bin', 'json', 'txt', 'labels'.
         """
         # Load metadata first (contains shape info for volume reconstruction)
         metadata = json.loads(sample['json'].decode('utf-8'))
@@ -202,7 +202,7 @@ class CTReportWebDataset:
         # Load volume data (stored as raw bytes, reconstruct from shape and dtype)
         volume_shape = tuple(metadata['volume_shape'])
         volume_dtype = np.dtype(metadata['volume_dtype'])
-        volume_data = np.frombuffer(sample['npy'], dtype=volume_dtype).reshape(volume_shape)
+        volume_data = np.frombuffer(sample['bin'], dtype=volume_dtype).reshape(volume_shape)
 
         # Load report text
         report_text = sample['txt'].decode('utf-8')
@@ -238,7 +238,7 @@ class CTReportWebDataset:
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle)
             .shuffle(self.buffer_size if self.shuffle else 0)
-            .decode()  # This handles basic decompression
+            # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)  # Custom decoding and processing
             .batched(batch_size)  # Create batches
         )
@@ -270,7 +270,7 @@ class CTReportWebDataset:
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle)
             .shuffle(self.buffer_size if self.shuffle else 0)
-            .decode()
+            # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)
         )
 
