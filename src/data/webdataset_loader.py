@@ -80,9 +80,11 @@ class CTReportWebDataset:
         if manifest_path.exists():
             with open(manifest_path, 'r') as f:
                 self.manifest = json.load(f)
-            print(f"[{self.mode.upper()}] Loaded manifest: {self.manifest['total_samples']} samples")
+            self.num_samples = self.manifest['total_samples']
+            print(f"[{self.mode.upper()}] Loaded manifest: {self.num_samples} samples")
         else:
             self.manifest = None
+            self.num_samples = None
             print(f"[{self.mode.upper()}] Warning: No manifest.json found")
 
     def _clean_text(self, text: str) -> str:
@@ -267,8 +269,11 @@ class CTReportWebDataset:
         """
         from torch.utils.data import DataLoader
 
+        # shardshuffle should be False or a positive integer (not True)
+        shard_shuffle = 100 if self.shuffle else False
+
         dataset = (
-            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
+            wds.WebDataset(self.shard_pattern, shardshuffle=shard_shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
             # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)

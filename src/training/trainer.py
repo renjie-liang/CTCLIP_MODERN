@@ -116,7 +116,7 @@ class CTClipTrainer(nn.Module):
         self.print(f"Using WebDataset format")
 
         # Training dataset
-        train_dataset = CTReportWebDataset(
+        self.train_dataset = CTReportWebDataset(
             shard_pattern=data_cfg['webdataset_shards_train'],
             shuffle=True,
             buffer_size=data_cfg.get('shuffle_buffer_size', 1000),
@@ -124,7 +124,7 @@ class CTClipTrainer(nn.Module):
         )
 
         # Validation dataset
-        val_dataset = CTReportWebDataset(
+        self.val_dataset = CTReportWebDataset(
             shard_pattern=data_cfg['webdataset_shards_val'],
             shuffle=False,
             buffer_size=0,
@@ -132,13 +132,13 @@ class CTClipTrainer(nn.Module):
         )
 
         # Create DataLoaders
-        self.train_dataloader = train_dataset.create_pytorch_dataloader(
+        self.train_dataloader = self.train_dataset.create_pytorch_dataloader(
             batch_size=self.batch_size,
             num_workers=data_cfg['num_workers'],
             prefetch_factor=data_cfg.get('prefetch_factor', 2)
         )
 
-        self.val_dataloader = val_dataset.create_pytorch_dataloader(
+        self.val_dataloader = self.val_dataset.create_pytorch_dataloader(
             batch_size=1,
             num_workers=data_cfg['num_workers'],
             prefetch_factor=data_cfg.get('prefetch_factor', 2)
@@ -176,7 +176,13 @@ class CTClipTrainer(nn.Module):
         )
 
         # Calculate steps per epoch
-        self.steps_per_epoch = len(self.train_dataloader) // self.gradient_accumulation_steps
+        # WebDataset doesn't have len(), so calculate from num_samples
+        if self.train_dataset.num_samples is not None:
+            self.steps_per_epoch = (self.train_dataset.num_samples // self.batch_size) // self.gradient_accumulation_steps
+        else:
+            # Fallback: estimate based on typical dataset size
+            self.steps_per_epoch = 1000
+            self.print("Warning: Could not determine dataset size, using estimated steps_per_epoch=1000")
 
         # Initialize components
         self.print("\n" + "="*80)
