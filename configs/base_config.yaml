@@ -11,9 +11,9 @@ experiment:
 # 数据配置
 data:
   # Dataset format: "npz" or "webdataset"
-  dataset_format: "npz"  # Change to "webdataset" to use WebDataset format
+  dataset_format: "webdataset"  # Using WebDataset format for faster I/O
 
-  # NPZ format paths (original format)
+  # NPZ format paths (original format) - kept for reference
   # DATA_ROOT: /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset
   train_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_npz"
   valid_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_npz"
@@ -28,10 +28,10 @@ data:
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
   # WebDataset format paths (optimized format with float16)
-  # Uncomment and set these paths after converting data to WebDataset format
-  # webdataset_shards_train: "/path/to/webdataset/train/shard-{000000..000399}.tar"
-  # webdataset_shards_val: "/path/to/webdataset/val/shard-{000000..000049}.tar"
-  # shuffle_buffer_size: 1000  # Buffer size for shuffling in WebDataset mode
+  # IMPORTANT: Update these paths to match your actual WebDataset location
+  webdataset_shards_train: "/path/to/your/webdataset/train/shard-{000000..000314}.tar"  # 315 shards
+  webdataset_shards_val: "/path/to/your/webdataset/val/shard-{000000..000059}.tar"      # 60 shards (if 50 samples/shard)
+  shuffle_buffer_size: 1000  # Buffer size for shuffling in WebDataset mode
 
   # DataLoader配置
   batch_size: 32
