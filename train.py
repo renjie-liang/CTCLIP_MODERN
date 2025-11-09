@@ -1,25 +1,30 @@
-import sys
+"""
+CT-CLIP Training Script
+
+Step-based training with multi-GPU support
+"""
+
 import argparse
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch
 from transformers import BertTokenizer, BertModel
 
 from src.models.ctvit import CTViT
-from ct_clip import CTCLIP
-from CTCLIPTrainerV2 import CTClipTrainerV2
-from configs import load_config
+from src.models.ct_clip import CTCLIP
+from src.training.trainer import CTClipTrainer
+from src.utils.config import load_config
+from src.utils.seed import set_seed
 
 
 def parse_args():
-    """解析命令行参数"""
-    parser = argparse.ArgumentParser(description="CT-CLIP Training V2")
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description="CT-CLIP Training")
 
     parser.add_argument(
         '--config',
         type=str,
-        default='train_pipeline/configs/base_config.yaml',
+        default='configs/base_config.yaml',
         help='Path to config file'
     )
 
@@ -35,14 +40,14 @@ def parse_args():
 
 def build_model(config: dict, device: torch.device):
     """
-    构建 CT-CLIP 模型
+    Build CT-CLIP model
 
     Args:
-        config: 配置字典
-        device: 设备
+        config: Config dict
+        device: Device
 
     Returns:
-        CT-CLIP 模型
+        CT-CLIP model
     """
     model_config = config['model']
 
@@ -57,7 +62,7 @@ def build_model(config: dict, device: torch.device):
 
     # Image Encoder (CTViT)
     image_config = model_config['image_encoder'].copy()
-    image_config.pop('type', None)  # Remove 'type' field
+    image_config.pop('type', None)
     image_encoder = CTViT(**image_config)
 
     # CLIP
@@ -74,10 +79,10 @@ def build_model(config: dict, device: torch.device):
 
 
 def main():
-    """主训练流程"""
+    """Main training flow"""
     args = parse_args()
 
-    # ========== 1. 加载配置 ==========
+    # Load config
     print("="*80)
     print("Loading configuration...")
     print("="*80)
@@ -87,7 +92,12 @@ def main():
     print(f"Experiment: {config['experiment']['name']}")
     print(f"Config: {args.config}")
 
-    # ========== 2. 设置设备 ==========
+    # Set seed
+    seed = config['experiment'].get('seed', 2025)
+    set_seed(seed)
+    print(f"Random seed: {seed}")
+
+    # Set device
     device_config = config['device']
     if device_config['use_cuda'] and torch.cuda.is_available():
         device = torch.device(f"cuda:{device_config['cuda_device']}")
@@ -96,42 +106,43 @@ def main():
 
     print(f"Device: {device}")
 
-    # ========== 3. 构建模型 ==========
+    # Build model
     print("\n" + "="*80)
     print("Building model...")
     print("="*80)
 
     model = build_model(config, device)
 
-    # 统计参数
+    # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
 
-    # ========== 4. 创建 Trainer V2 ==========
+    # Create Trainer
     print("\n" + "="*80)
-    print("Initializing CTClipTrainerV2...")
+    print("Initializing Trainer...")
     print("="*80)
 
-    trainer = CTClipTrainerV2(model, config)
+    trainer = CTClipTrainer(model, config)
 
-    # ========== 5. 从checkpoint恢复（如果需要） ==========
+    # Resume from checkpoint if needed
     if args.resume:
         print("\n" + "="*80)
         print(f"Resuming from checkpoint: {args.resume}")
         print("="*80)
         trainer.load_checkpoint(args.resume)
 
-    # ========== 6. 开始训练 ==========
+    # Start training
     print("\n" + "="*80)
     print("Starting Training")
     print("="*80)
     print(f"Experiment: {config['experiment']['name']}")
-    print(f"Epochs: {config['training']['num_epochs']}")
+    print(f"Max steps: {config['training']['max_steps']}")
     print(f"Batch size: {config['data']['batch_size']}")
     print(f"Learning rate: {config['training']['learning_rate']}")
+    print(f"Warmup steps: {config['training']['warmup_steps']}")
     print("="*80 + "\n")
 
     trainer.train()
