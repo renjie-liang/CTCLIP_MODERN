@@ -119,12 +119,10 @@ def process_single_sample(
     # Ensure the array is C-contiguous for proper serialization
     volume_fp16 = np.ascontiguousarray(npz_data.astype(np.float16))
 
-    # Serialize volume to bytes
-    volume_bytes = io.BytesIO()
-    np.save(volume_bytes, volume_fp16)
-    volume_bytes = volume_bytes.getvalue()
+    # Serialize volume to raw bytes (more efficient than np.save, no pickle)
+    volume_bytes = volume_fp16.tobytes()
 
-    # Prepare metadata JSON
+    # Prepare metadata JSON (include shape and dtype for reconstruction)
     meta_row = meta_df.loc[study_id]
     metadata = {
         'study_id': study_id,
@@ -132,7 +130,9 @@ def process_single_sample(
         'RescaleIntercept': float(meta_row["RescaleIntercept"]),
         'XYSpacing': str(meta_row["XYSpacing"]),
         'ZSpacing': float(meta_row["ZSpacing"]),
-        'original_shape': list(npz_data.shape)
+        'original_shape': list(npz_data.shape),
+        'volume_shape': list(volume_fp16.shape),  # Shape for reconstruction
+        'volume_dtype': 'float16'  # Dtype for reconstruction
     }
     metadata_bytes = json.dumps(metadata).encode('utf-8')
 
