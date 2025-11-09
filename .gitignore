@@ -1,0 +1,8 @@
+dataset
+saves
+*.csv
+*.json
+*.jsonl
+*.dbjson
+*.txt
+*__pycache__

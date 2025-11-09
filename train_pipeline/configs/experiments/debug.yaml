@@ -1,0 +1,28 @@
+# Debug配置 - 用于快速测试
+_base_: "../base_config.yaml"
+
+experiment:
+  name: "ct-clip-debug"
+  tags: ["debug", "test"]
+  notes: "调试用的小规模配置"
+
+data:
+  batch_size: 2  # 小batch
+  num_workers: 2
+
+training:
+  num_epochs: 2  # 只训练2个epoch
+  learning_rate: 1e-4
+  gradient_accumulation_steps: 1
+  save_every_n_epochs: 1
+
+validation:
+  every_n_epochs: 1
+
+checkpoint:
+  keep_last_n: 2
+
+logging:
+  use_wandb: false  # Debug时不用wandb
+  use_console: true
+  log_every_n_steps: 5

@@ -1,0 +1,127 @@
+# CT-CLIP Training - Base Configuration
+# 所有实验的基础配置模板
+
+# 实验信息
+experiment:
+  name: "ct-clip-baseline"
+  tags: ["baseline", "ctclip"]
+  seed: 42
+  notes: "基础实验配置"
+
+# 数据配置
+data:
+  # 数据路径 - 使用环境变量，方便在不同机器上运行
+  train_dir: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/train_fixed_npz"
+  valid_dir: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/valid_fixed_npz"
+
+  reports_train: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/radiology_text_reports/train_reports.csv"
+  reports_valid: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/radiology_text_reports/validation_reports.csv"
+
+  train_meta: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/metadata/train_metadata.csv"
+  valid_meta: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/metadata/validation_metadata.csv"
+
+  labels_train: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/multi_abnormality_labels/train_predicted_labels.csv"
+  labels_valid: "${DATA_ROOT:/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset}/multi_abnormality_labels/valid_predicted_labels.csv"
+
+  # DataLoader配置
+  batch_size: 8
+  num_workers: 8
+  use_embedding: false
+  embedding_dir: "./dataset/embedding"
+
+# 模型配置
+model:
+  # Image Encoder (CTViT)
+  image_encoder:
+    type: "CTViT"
+    dim: 512
+    codebook_size: 8192
+    image_size: 480
+    patch_size: 20
+    temporal_patch_size: 10
+    spatial_depth: 4
+    temporal_depth: 4
+    dim_head: 32
+    heads: 8
+
+  # Text Encoder (BiomedBERT)
+  text_encoder:
+    type: "BiomedBERT"
+    path: "${WEIGHTS_ROOT:/orange/xujie/liang.renjie/DATA/weights}/BiomedVLP-CXR-BERT-specialized"
+    do_lower_case: true
+
+  # CLIP配置
+  clip:
+    dim_image: 294912
+    dim_text: 768
+    dim_latent: 512
+    extra_latent_projection: false
+    use_mlm: false
+    downsample_image_embeds: false
+    use_all_token_embeds: false
+
+# 训练配置
+training:
+  num_epochs: 100
+  learning_rate: 1.25e-6
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  max_grad_norm: 0.5
+  save_every_n_epochs: 5
+
+  # 学习率调度
+  warmup_steps: 1000
+  scheduler: "cosine"  # cosine, linear, constant, none
+
+  # 优化器
+  optimizer: "adamw"  # adamw, adam, sgd
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1e-8
+
+# 验证配置
+validation:
+  every_n_epochs: 1
+  metrics: ["auroc", "auprc", "f1", "precision", "recall"]
+  use_bootstrap: false  # 训练时不用bootstrap，推理时用
+  threshold: 0.5  # 二分类阈值
+
+# Checkpoint配置
+checkpoint:
+  save_dir: "./saves"
+  keep_last_n: 3  # 只保留最新的N个checkpoint
+  save_best: true
+  best_metric: "auroc"
+  best_metric_mode: "max"  # max or min
+
+# 日志配置
+logging:
+  # 启用的后端
+  use_wandb: true
+  use_tensorboard: false
+  use_console: true
+
+  # WandB配置
+  wandb:
+    project: "ct-clip"
+    entity: null  # 你的wandb用户名，null则使用默认
+    mode: "online"  # online, offline, disabled
+    group: null  # 实验组（用于分组对比）
+    job_type: "train"
+
+  # TensorBoard配置
+  tensorboard:
+    log_dir: "./runs"
+
+  # 日志频率
+  log_every_n_steps: 10
+  log_grad_norm: true
+  log_learning_rate: true
+  log_model_params: false  # 是否记录模型参数分布（慢）
+
+# 设备配置
+device:
+  use_cuda: true
+  cuda_device: 0  # GPU设备号，-1为CPU
+  mixed_precision: false  # 是否使用混合精度训练（FP16）
+  compile: false  # 是否使用torch.compile（PyTorch 2.0+）
