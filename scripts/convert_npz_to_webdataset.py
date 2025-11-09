@@ -159,19 +159,24 @@ def create_shard(
     output_dir: Path,
     reports_dict: Dict,
     meta_df: pd.DataFrame,
-    labels_dict: Dict
-) -> Tuple[int, int, int]:
+    labels_dict: Dict,
+    delete_source: bool = False
+) -> Tuple[int, int, int, List[str]]:
     """
     Create a single WebDataset shard (TAR file).
 
+    Args:
+        delete_source: If True, delete source NPZ files after successful conversion
+
     Returns:
-        (shard_id, num_samples, shard_size_bytes)
+        (shard_id, num_samples, shard_size_bytes, deleted_files)
     """
 
     shard_path = output_dir / f"shard-{shard_id:06d}.tar"
 
     num_samples = 0
     total_size = 0
+    deleted_files = []
 
     with tarfile.open(shard_path, 'w') as tar:
         for idx, (npz_path, study_id) in enumerate(samples):
@@ -193,12 +198,20 @@ def create_shard(
 
                 num_samples += 1
 
+                # Delete source NPZ file after successful conversion
+                if delete_source:
+                    try:
+                        os.remove(npz_path)
+                        deleted_files.append(npz_path)
+                    except Exception as e:
+                        print(f"Warning: Failed to delete {npz_path}: {e}")
+
             except Exception as e:
                 print(f"Error processing {study_id}: {e}")
                 continue
 
     shard_size_mb = total_size / (1024**2)
-    return shard_id, num_samples, shard_size_mb
+    return shard_id, num_samples, shard_size_mb, deleted_files
 
 
 def main():
@@ -211,6 +224,9 @@ def main():
     parser.add_argument('--samples_per_shard', type=int, default=100, help='Number of samples per shard')
     parser.add_argument('--num_workers', type=int, default=8, help='Number of parallel workers')
     parser.add_argument('--test_mode', action='store_true', help='Test mode: only convert first 100 samples')
+    parser.add_argument('--delete_source_files', action='store_true',
+                        help='Delete source NPZ files after successful conversion (DANGEROUS! Use with caution)')
+    parser.add_argument('--yes', action='store_true', help='Skip confirmation prompt for deletion')
 
     args = parser.parse_args()
 
@@ -253,10 +269,36 @@ def main():
         print("\n⚠️  TEST MODE: Only converting first 100 samples")
         matched_samples = matched_samples[:100]
 
+    # Safety confirmation for deletion
+    if args.delete_source_files:
+        print("\n" + "="*80)
+        print("⚠️  WARNING: SOURCE FILE DELETION ENABLED ⚠️")
+        print("="*80)
+        print(f"This will DELETE {len(matched_samples)} NPZ files after conversion!")
+        print(f"Total estimated size: ~{len(matched_samples) * 0.35:.1f} GB will be freed")
+        print("\nIMPORTANT:")
+        print("  - Files will be deleted IMMEDIATELY after successful conversion")
+        print("  - This operation CANNOT be undone")
+        print("  - Make sure you have backups if needed")
+        print("="*80)
+
+        if not args.yes:
+            response = input("\nAre you ABSOLUTELY sure you want to proceed? (type 'DELETE' to confirm): ")
+            if response != 'DELETE':
+                print("Aborted. Files will NOT be deleted.")
+                print("Conversion will continue WITHOUT deletion.")
+                args.delete_source_files = False
+            else:
+                print("\n✓ Confirmed. Source files will be deleted after conversion.")
+        else:
+            print("Auto-confirmed via --yes flag. Source files WILL be deleted.")
+
     # Create shards
     print(f"\n[4/4] Creating WebDataset shards...")
     print(f"  - Samples per shard: {args.samples_per_shard}")
     print(f"  - Parallel workers: {args.num_workers}")
+    if args.delete_source_files:
+        print(f"  - ⚠️  DELETE MODE: Source NPZ files will be removed after conversion")
 
     # Split into shards
     shards = []
@@ -270,6 +312,7 @@ def main():
     # Process shards in parallel
     total_samples = 0
     total_size_mb = 0
+    total_deleted = 0
 
     with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
         futures = {
@@ -280,15 +323,17 @@ def main():
                 output_dir,
                 reports_dict,
                 meta_df,
-                labels_dict
+                labels_dict,
+                args.delete_source_files
             ): shard_id
             for shard_id, shard_samples in shards
         }
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="Creating shards"):
-            shard_id, num_samples, shard_size_mb = future.result()
+            shard_id, num_samples, shard_size_mb, deleted_files = future.result()
             total_samples += num_samples
             total_size_mb += shard_size_mb
+            total_deleted += len(deleted_files)
 
     # Write manifest file
     manifest = {
@@ -320,6 +365,19 @@ def main():
     compression_ratio = original_size_estimate / total_size_mb if total_size_mb > 0 else 0
     print(f"\nEstimated compression ratio: {compression_ratio:.2f}x")
     print(f"Storage savings: {(1 - 1/compression_ratio)*100:.1f}%")
+
+    # Deletion summary
+    if args.delete_source_files:
+        print("\n" + "="*80)
+        print("SOURCE FILE DELETION SUMMARY")
+        print("="*80)
+        print(f"Files deleted: {total_deleted}")
+        print(f"Space freed: ~{total_deleted * 0.35:.2f} GB")
+        if total_deleted < total_samples:
+            print(f"⚠️  Warning: {total_samples - total_deleted} files were NOT deleted (conversion errors)")
+        else:
+            print("✓ All source NPZ files successfully deleted")
+        print("="*80)
 
 
 if __name__ == '__main__':
