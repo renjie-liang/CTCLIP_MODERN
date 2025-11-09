@@ -236,7 +236,7 @@ class CTReportWebDataset:
             DataLoader compatible object
         """
         dataset = (
-            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle)
+            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
             # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)  # Custom decoding and processing
@@ -268,7 +268,7 @@ class CTReportWebDataset:
         from torch.utils.data import DataLoader
 
         dataset = (
-            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle)
+            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
             # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)
