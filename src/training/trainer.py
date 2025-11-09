@@ -87,10 +87,13 @@ class CTClipTrainer(nn.Module):
         self.results_folder = Path(checkpoint_cfg['save_dir'])
         self.results_folder.mkdir(parents=True, exist_ok=True)
 
-        # Initialize Accelerator
+        # Initialize Accelerator with mixed precision training
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         init_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
-        self.accelerator = Accelerator(kwargs_handlers=[ddp_kwargs, init_kwargs])
+        self.accelerator = Accelerator(
+            kwargs_handlers=[ddp_kwargs, init_kwargs],
+            mixed_precision='fp16'  # Enable automatic mixed precision (AMP)
+        )
 
         # Tokenizer
         text_cfg = config['model']['text_encoder']
@@ -312,7 +315,7 @@ class CTClipTrainer(nn.Module):
             max_length=512
         ).to(device, non_blocking=True)
 
-        # Forward pass
+        # Forward pass with automatic mixed precision (float32 inputs → float16 computation)
         with self.accelerator.autocast():
             loss = self.model(text_tokens, volume_tensor, return_loss=True, device=device)
             loss = loss / self.gradient_accumulation_steps
