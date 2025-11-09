@@ -25,7 +25,7 @@ from accelerate import Accelerator
 from accelerate import DistributedDataParallelKwargs
 from accelerate.utils import InitProcessGroupKwargs
 
-from transformers import BertTokenizer
+from transformers import AutoTokenizer
 
 from ..training import get_optimizer, get_warmup_cosine_schedule
 from ..data import CTReportDataset
@@ -93,9 +93,10 @@ class CTClipTrainer(nn.Module):
 
         # Tokenizer
         text_cfg = config['model']['text_encoder']
-        self.tokenizer = BertTokenizer.from_pretrained(
+        self.tokenizer = AutoTokenizer.from_pretrained(
             text_cfg['path'],
-            do_lower_case=text_cfg['do_lower_case']
+            do_lower_case=text_cfg['do_lower_case'],
+            trust_remote_code=True
         )
 
         # Training state
@@ -130,6 +131,9 @@ class CTClipTrainer(nn.Module):
             num_workers=data_cfg['num_workers'],
             batch_size=self.batch_size,
             shuffle=True,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2
         )
 
         self.val_dataloader = DataLoader(
@@ -137,6 +141,9 @@ class CTClipTrainer(nn.Module):
             num_workers=data_cfg['num_workers'],
             batch_size=1,
             shuffle=False,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2
         )
 
         # Device
@@ -298,7 +305,7 @@ class CTClipTrainer(nn.Module):
 
         # Unpack batch
         volume_tensor, report_text, disease_labels, study_id, embed_tensor = batch
-        volume_tensor = volume_tensor.to(device)
+        volume_tensor = volume_tensor.to(device, non_blocking=True)
 
         # Tokenize text
         report_text = list(report_text)
@@ -308,7 +315,7 @@ class CTClipTrainer(nn.Module):
             padding="max_length",
             truncation=True,
             max_length=512
-        ).to(device)
+        ).to(device, non_blocking=True)
 
         # Forward pass
         with self.accelerator.autocast():

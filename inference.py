@@ -12,7 +12,7 @@ import torch
 import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
-from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModel
 
 from src.models.ctvit import CTViT
 from src.models.ct_clip import CTCLIP
@@ -75,11 +75,11 @@ def build_model(config: dict, device: torch.device):
 
     # Text Encoder
     text_config = model_config['text_encoder']
-    tokenizer = BertTokenizer.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(
         text_config['path'],
         do_lower_case=text_config['do_lower_case']
     )
-    text_encoder = BertModel.from_pretrained(text_config['path'])
+    text_encoder = AutoModel.from_pretrained(text_config['path'], trust_remote_code=True)
     text_encoder.resize_token_embeddings(len(tokenizer))
 
     # Image Encoder
@@ -220,7 +220,7 @@ def main():
 
     # Tokenizer
     text_cfg = config['model']['text_encoder']
-    tokenizer = BertTokenizer.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(
         text_cfg['path'],
         do_lower_case=text_cfg['do_lower_case']
     )
@@ -239,6 +239,8 @@ def main():
         num_workers=data_cfg['num_workers'],
         batch_size=1,
         shuffle=False,
+        pin_memory=True,
+
     )
 
     print(f"Validation samples: {len(val_dataset)}")

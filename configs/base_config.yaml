@@ -24,8 +24,8 @@ data:
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
   # DataLoader配置
-  batch_size: 8
-  num_workers: 4
+  batch_size: 32
+  num_workers: 32
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
 

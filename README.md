@@ -71,7 +71,7 @@ python train.py --config configs/base_config.yaml
 
 ```bash
 # Using accelerate (simplest way)
-accelerate launch --multi_gpu --num_processes 4 train.py --config configs/base_config.yaml
+accelerate launch --multi_gpu --num_processes 2 train.py --config configs/base_config.yaml
 ```
 
 Or create accelerate config:

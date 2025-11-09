@@ -1,3 +1,4 @@
+wandb
 dataset
 saves
 *.csv
@@ -6,3 +7,4 @@ saves
 *.dbjson
 *.txt
 *__pycache__
+RJ.md

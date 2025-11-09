@@ -11,10 +11,10 @@ from torch.utils.checkpoint import checkpoint
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange, Reduce
 
-from ct_clip.mlm import MLM
-from ct_clip.visual_ssl import SimSiam, SimCLR
+from .mlm import MLM
+from .visual_ssl import SimSiam, SimCLR
 
-from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModel
 
 # helper functions
 
@@ -582,7 +582,7 @@ class CTCLIP(nn.Module):
 
         self.multiview_loss_weight = multiview_loss_weight
 
-        self.tokenizer= BertTokenizer.from_pretrained('microsoft/BiomedVLP-CXR-BERT-specialized',do_lower_case=True)
+        self.tokenizer= AutoTokenizer.from_pretrained('microsoft/BiomedVLP-CXR-BERT-specialized',do_lower_case=True, trust_remote_code=True)
 
     def state_dict(self, *args, **kwargs):
         return super().state_dict(*args, **kwargs)
