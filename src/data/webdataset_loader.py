@@ -236,7 +236,7 @@ class CTReportWebDataset:
             DataLoader compatible object
         """
         dataset = (
-            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle)
+            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
             # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)  # Custom decoding and processing
@@ -268,21 +268,27 @@ class CTReportWebDataset:
         from torch.utils.data import DataLoader
 
         dataset = (
-            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle)
+            wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
             # Don't use .decode() - we handle all decoding manually in _decode_sample
             .map(self._decode_sample)
         )
 
-        loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            prefetch_factor=prefetch_factor,
-            persistent_workers=True,
-            pin_memory=True,
-            collate_fn=self._collate_fn
-        )
+        # Build DataLoader kwargs
+        loader_kwargs = {
+            'dataset': dataset,
+            'batch_size': batch_size,
+            'num_workers': num_workers,
+            'persistent_workers': True if num_workers > 0 else False,
+            'pin_memory': True,
+            'collate_fn': self._collate_fn
+        }
+
+        # Only add prefetch_factor if num_workers > 0
+        if num_workers > 0:
+            loader_kwargs['prefetch_factor'] = prefetch_factor
+
+        loader = DataLoader(**loader_kwargs)
 
         return loader
 
