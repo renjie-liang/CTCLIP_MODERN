@@ -10,6 +10,10 @@ experiment:
 
 # 数据配置
 data:
+  # Dataset format: "npz" or "webdataset"
+  dataset_format: "npz"  # Change to "webdataset" to use WebDataset format
+
+  # NPZ format paths (original format)
   # DATA_ROOT: /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset
   train_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_npz"
   valid_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_npz"
@@ -23,9 +27,17 @@ data:
   labels_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv"
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
+  # WebDataset format paths (optimized format with float16)
+  # Uncomment and set these paths after converting data to WebDataset format
+  # webdataset_shards_train: "/path/to/webdataset/train/shard-{000000..000399}.tar"
+  # webdataset_shards_val: "/path/to/webdataset/val/shard-{000000..000049}.tar"
+  # shuffle_buffer_size: 1000  # Buffer size for shuffling in WebDataset mode
+
   # DataLoader配置
   batch_size: 32
   num_workers: 32
+  prefetch_factor: 2  # Number of batches to prefetch per worker
+  persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
 
