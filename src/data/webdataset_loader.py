@@ -87,6 +87,18 @@ class CTReportWebDataset:
             self.num_samples = None
             print(f"[{self.mode.upper()}] Warning: No manifest.json found")
 
+    def __len__(self):
+        """
+        Return the number of samples in the dataset.
+
+        Note: WebDataset is an IterableDataset and doesn't naturally support len().
+        We provide this for compatibility with code that expects it.
+        """
+        if self.num_samples is not None:
+            return self.num_samples
+        else:
+            raise ValueError("Cannot determine dataset length: manifest.json not found")
+
     def _clean_text(self, text: str) -> str:
         """Clean report text by removing special characters."""
         text = str(text)
