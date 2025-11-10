@@ -1,5 +1,6 @@
 import torch
 import psutil
+import os
 
 
 def get_gpu_memory():
@@ -25,9 +26,23 @@ def get_gpu_memory():
     return " | ".join(gpu_info)
 
 
+def get_process_memory():
+    """
+    Get current process RAM usage (this training process only)
+
+    Returns:
+        str: Formatted process memory usage string
+    """
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    rss_gb = mem_info.rss / 1024**3  # Resident Set Size in GB
+
+    return f"Process RAM: {rss_gb:.2f}GB"
+
+
 def get_system_memory():
     """
-    Get system RAM usage
+    Get system RAM usage (all processes on the node)
 
     Returns:
         str: Formatted system memory usage string
@@ -37,17 +52,17 @@ def get_system_memory():
     total_gb = mem.total / 1024**3
     percent = mem.percent
 
-    return f"RAM: {used_gb:.2f}/{total_gb:.2f}GB ({percent:.1f}%)"
+    return f"System RAM: {used_gb:.2f}/{total_gb:.2f}GB ({percent:.1f}%)"
 
 
 def get_memory_info():
     """
-    Get both GPU and system memory info
+    Get GPU and process memory info (process-specific, not system-wide)
 
     Returns:
         str: Combined memory info string
     """
     gpu_mem = get_gpu_memory()
-    sys_mem = get_system_memory()
+    proc_mem = get_process_memory()
 
-    return f"{gpu_mem} | {sys_mem}"
+    return f"{gpu_mem} | {proc_mem}"
