@@ -54,26 +54,37 @@ def test_with_accelerate():
 
     print("✓ DataLoader created")
 
-    # Initialize Accelerator with dispatch_batches=True
+    # Save original collate_fn
+    print("\nSaving original collate_fn...")
+    original_collate_fn = dataloader.collate_fn
+    print(f"✓ Collate function saved: {original_collate_fn}")
+
+    # Initialize Accelerator
     print("\nInitializing Accelerator...")
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     init_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
 
     accelerator = Accelerator(
         kwargs_handlers=[ddp_kwargs, init_kwargs],
-        mixed_precision='fp16',
-        dispatch_batches=True  # KEY FIX: Don't re-batch data
+        mixed_precision='fp16'
     )
 
     print(f"✓ Accelerator initialized")
     print(f"  Device: {accelerator.device}")
     print(f"  Mixed precision: fp16")
-    print(f"  Dispatch batches: True")
 
     # Prepare DataLoader with Accelerator
     print("\nPreparing DataLoader with Accelerator...")
     dataloader = accelerator.prepare(dataloader)
     print("✓ DataLoader prepared")
+
+    # Restore custom collate_fn (KEY FIX: prevents TypeError with string data)
+    print("\nRestoring custom collate_fn...")
+    if hasattr(dataloader, 'collate_fn'):
+        dataloader.collate_fn = original_collate_fn
+        print(f"✓ Collate function restored")
+    else:
+        print(f"⚠ Warning: DataLoader has no collate_fn attribute")
 
     # Test loading batches
     print("\n" + "="*80)
