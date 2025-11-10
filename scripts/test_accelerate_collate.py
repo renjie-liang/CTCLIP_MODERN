@@ -54,11 +54,6 @@ def test_with_accelerate():
 
     print("✓ DataLoader created")
 
-    # Save original collate_fn
-    print("\nSaving original collate_fn...")
-    original_collate_fn = dataloader.collate_fn
-    print(f"✓ Collate function saved: {original_collate_fn}")
-
     # Initialize Accelerator
     print("\nInitializing Accelerator...")
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -72,19 +67,8 @@ def test_with_accelerate():
     print(f"✓ Accelerator initialized")
     print(f"  Device: {accelerator.device}")
     print(f"  Mixed precision: fp16")
-
-    # Prepare DataLoader with Accelerator
-    print("\nPreparing DataLoader with Accelerator...")
-    dataloader = accelerator.prepare(dataloader)
-    print("✓ DataLoader prepared")
-
-    # Restore custom collate_fn (KEY FIX: prevents TypeError with string data)
-    print("\nRestoring custom collate_fn...")
-    if hasattr(dataloader, 'collate_fn'):
-        dataloader.collate_fn = original_collate_fn
-        print(f"✓ Collate function restored")
-    else:
-        print(f"⚠ Warning: DataLoader has no collate_fn attribute")
+    print(f"\nNote: DataLoader is NOT prepared (to preserve custom collate_fn)")
+    print(f"Only model/optimizer/scheduler should be prepared in training code")
 
     # Test loading batches
     print("\n" + "="*80)
@@ -114,11 +98,12 @@ def test_with_accelerate():
         print("\n" + "="*80)
         print("✓ All tests passed!")
         print("="*80)
-        print("\nThe fix works correctly:")
-        print("- Custom collate_fn is preserved")
-        print("- String data (report_text, study_id) handled properly")
-        print("- Tensor data (volume, labels, embed) handled properly")
-        print("- No TypeError with Accelerate prepare()")
+        print("\nSolution:")
+        print("- DataLoader NOT prepared with Accelerate")
+        print("- Only model/optimizer/scheduler are prepared")
+        print("- Custom collate_fn preserved (no wrapping/unwrapping needed)")
+        print("- String data (report_text, study_id) handled correctly")
+        print("- Tensor data (volume, labels, embed) handled correctly")
         print("="*80)
 
         return 0
