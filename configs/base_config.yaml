@@ -29,8 +29,8 @@ data:
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
   # DataLoader配置
-  batch_size: 32
-  num_workers: 32
+  batch_size: 8
+  num_workers: 24
   prefetch_factor: 2  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false

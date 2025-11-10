@@ -92,8 +92,7 @@ class CTClipTrainer(nn.Module):
         init_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
         self.accelerator = Accelerator(
             kwargs_handlers=[ddp_kwargs, init_kwargs],
-            mixed_precision='fp16',  # Enable automatic mixed precision (AMP)
-            dispatch_batches=True  # Don't re-batch data (we have custom collate_fn)
+            mixed_precision='fp16'  # Enable automatic mixed precision (AMP)
         )
 
         # Tokenizer
@@ -161,6 +160,10 @@ class CTClipTrainer(nn.Module):
             min_lr_ratio=self.min_lr_ratio
         )
 
+        # Save original collate_fn before prepare (Accelerate may override it)
+        train_collate_fn = self.train_dataloader.collate_fn
+        val_collate_fn = self.val_dataloader.collate_fn
+
         # Prepare with Accelerator
         (
             self.train_dataloader,
@@ -175,6 +178,12 @@ class CTClipTrainer(nn.Module):
             self.optim,
             self.scheduler,
         )
+
+        # Restore custom collate_fn after prepare (fixes TypeError with string data)
+        if hasattr(self.train_dataloader, 'collate_fn'):
+            self.train_dataloader.collate_fn = train_collate_fn
+        if hasattr(self.val_dataloader, 'collate_fn'):
+            self.val_dataloader.collate_fn = val_collate_fn
 
         # Calculate steps per epoch
         # WebDataset doesn't have len(), so calculate from num_samples
