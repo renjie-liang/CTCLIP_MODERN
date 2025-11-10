@@ -8,12 +8,16 @@ for significantly faster I/O and reduced storage requirements.
 import os
 import json
 import io
+import time
 from pathlib import Path
 from typing import Optional, Callable
 import numpy as np
 import torch
 import torch.nn.functional as F
 import webdataset as wds
+
+# Debug mode: set to True to enable detailed timing logs
+DEBUG_TIMING = os.environ.get('DEBUG_TIMING', 'false').lower() == 'true'
 
 
 def resize_array(array, current_spacing, target_spacing):
@@ -209,33 +213,65 @@ class CTReportWebDataset:
 
         WebDataset provides samples as dicts with keys like 'bin', 'json', 'txt', 'labels'.
         """
-        # Load metadata first (contains shape info for volume reconstruction)
-        metadata = json.loads(sample['json'].decode('utf-8'))
-        study_id = metadata['study_id']
+        sample_start = time.time() if DEBUG_TIMING else None
 
-        # Load volume data (stored as raw bytes, reconstruct from shape and dtype)
-        volume_shape = tuple(metadata['volume_shape'])
-        volume_dtype = np.dtype(metadata['volume_dtype'])
-        volume_data = np.frombuffer(sample['bin'], dtype=volume_dtype).reshape(volume_shape)
+        try:
+            # Load metadata first (contains shape info for volume reconstruction)
+            t0 = time.time()
+            metadata = json.loads(sample['json'].decode('utf-8'))
+            study_id = metadata['study_id']
+            if DEBUG_TIMING:
+                print(f"[{study_id}] Metadata decode: {time.time()-t0:.4f}s")
 
-        # Load report text
-        report_text = sample['txt'].decode('utf-8')
-        report_text = self._clean_text(report_text)
+            # Load volume data (stored as raw bytes, reconstruct from shape and dtype)
+            t0 = time.time()
+            volume_shape = tuple(metadata['volume_shape'])
+            volume_dtype = np.dtype(metadata['volume_dtype'])
+            volume_data = np.frombuffer(sample['bin'], dtype=volume_dtype).reshape(volume_shape)
+            if DEBUG_TIMING:
+                print(f"[{study_id}] Volume decode: {time.time()-t0:.4f}s (shape={volume_shape})")
 
-        # Load labels (binary data, decode as float32 array)
-        labels = np.frombuffer(sample['labels'], dtype=np.float32)
+            # Load report text
+            t0 = time.time()
+            report_text = sample['txt'].decode('utf-8')
+            report_text = self._clean_text(report_text)
+            if DEBUG_TIMING:
+                print(f"[{study_id}] Report decode: {time.time()-t0:.4f}s")
 
-        # Process volume
-        if self.use_embedding:
-            # For embedding mode, volume_data is already the embedding
-            embed_tensor = torch.from_numpy(volume_data.astype(np.float32))
-            volume_tensor = torch.empty(0, dtype=embed_tensor.dtype)
-        else:
-            # Process volume from float16 to final format
-            volume_tensor = self._process_volume(volume_data, metadata)
-            embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
+            # Load labels (binary data, decode as float32 array)
+            t0 = time.time()
+            labels = np.frombuffer(sample['labels'], dtype=np.float32)
+            if DEBUG_TIMING:
+                print(f"[{study_id}] Labels decode: {time.time()-t0:.4f}s")
 
-        return volume_tensor, report_text, labels, study_id, embed_tensor
+            # Process volume
+            if self.use_embedding:
+                # For embedding mode, volume_data is already the embedding
+                t0 = time.time()
+                embed_tensor = torch.from_numpy(volume_data.astype(np.float32))
+                volume_tensor = torch.empty(0, dtype=embed_tensor.dtype)
+                if DEBUG_TIMING:
+                    print(f"[{study_id}] Embedding convert: {time.time()-t0:.4f}s")
+            else:
+                # Process volume from float16 to final format
+                t0 = time.time()
+                volume_tensor = self._process_volume(volume_data, metadata)
+                embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
+                if DEBUG_TIMING:
+                    print(f"[{study_id}] Volume process: {time.time()-t0:.4f}s")
+
+            if DEBUG_TIMING:
+                print(f"[{study_id}] TOTAL decode time: {time.time()-sample_start:.4f}s\n")
+
+            return volume_tensor, report_text, labels, study_id, embed_tensor
+
+        except Exception as e:
+            # Enhanced error reporting
+            study_id = metadata.get('study_id', 'unknown') if 'metadata' in locals() else 'unknown'
+            print(f"ERROR decoding sample {study_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def make_loader(self, batch_size: int, num_workers: int = 4, prefetch_factor: int = 2):
         """
