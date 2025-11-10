@@ -160,30 +160,10 @@ class CTClipTrainer(nn.Module):
             min_lr_ratio=self.min_lr_ratio
         )
 
-        # Save original collate_fn before prepare (Accelerate may override it)
-        train_collate_fn = self.train_dataloader.collate_fn
-        val_collate_fn = self.val_dataloader.collate_fn
-
-        # Prepare with Accelerator
-        (
-            self.train_dataloader,
-            self.val_dataloader,
-            self.model,
-            self.optim,
-            self.scheduler,
-        ) = self.accelerator.prepare(
-            self.train_dataloader,
-            self.val_dataloader,
-            self.model,
-            self.optim,
-            self.scheduler,
+        # Prepare model, optimizer, scheduler (skip dataloaders to preserve custom collate_fn)
+        self.model, self.optim, self.scheduler = self.accelerator.prepare(
+            self.model, self.optim, self.scheduler
         )
-
-        # Restore custom collate_fn after prepare (fixes TypeError with string data)
-        if hasattr(self.train_dataloader, 'collate_fn'):
-            self.train_dataloader.collate_fn = train_collate_fn
-        if hasattr(self.val_dataloader, 'collate_fn'):
-            self.val_dataloader.collate_fn = val_collate_fn
 
         # Calculate steps per epoch
         # WebDataset doesn't have len(), so calculate from num_samples
