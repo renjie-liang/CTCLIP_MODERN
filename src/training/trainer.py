@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from datetime import timedelta
 from typing import Dict, List
+import time
 
 import torch
 from torch import nn
@@ -107,6 +108,21 @@ class CTClipTrainer(nn.Module):
         self.global_step = 0
         self.current_epoch = 0
         self.best_auroc = 0.0
+
+        # Performance profiling
+        self.profile_timing = config['logging'].get('profile_timing', False)
+        if self.profile_timing:
+            self.print("⚠ Performance profiling enabled - detailed timing will be printed")
+            # Initialize timing accumulators
+            self.timing_stats = {
+                'data_loading': [],
+                'data_to_device': [],
+                'tokenize': [],
+                'forward': [],
+                'backward': [],
+                'optimizer_step': [],
+                'total_step': []
+            }
 
         # Load pathology classes
         self.pathologies = self._load_pathology_classes(data_cfg['labels_valid'])
@@ -284,7 +300,7 @@ class CTClipTrainer(nn.Module):
         """Check if main process"""
         return self.accelerator.is_main_process
 
-    def train_step(self, batch, batch_idx: int) -> float:
+    def train_step(self, batch, batch_idx: int) -> Dict:
         """
         Execute one training step
 
@@ -293,15 +309,28 @@ class CTClipTrainer(nn.Module):
             batch_idx: Batch index
 
         Returns:
-            Loss value
+            Dict with loss and timing info
         """
+        timing = {}
         device = self.device
 
-        # Unpack batch
+        # Unpack batch and move to device
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t0 = time.time()
+
         volume_tensor, report_text, disease_labels, study_id, embed_tensor = batch
         volume_tensor = volume_tensor.to(device, non_blocking=True)
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            timing['data_to_device'] = time.time() - t0
+
         # Tokenize text
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t0 = time.time()
+
         report_text = list(report_text)
         text_tokens = self.tokenizer(
             report_text,
@@ -311,16 +340,40 @@ class CTClipTrainer(nn.Module):
             max_length=512
         ).to(device, non_blocking=True)
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            timing['tokenize'] = time.time() - t0
+
         # Forward pass with automatic mixed precision (float32 inputs → float16 computation)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t0 = time.time()
+
         with self.accelerator.autocast():
             loss = self.model(text_tokens, volume_tensor, return_loss=True, device=device)
             loss = loss / self.gradient_accumulation_steps
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            timing['forward'] = time.time() - t0
+
         # Backward pass
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t0 = time.time()
+
         self.accelerator.backward(loss)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            timing['backward'] = time.time() - t0
 
         # Update weights after accumulation
         if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                t0 = time.time()
+
             if self.max_grad_norm:
                 self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
@@ -328,10 +381,17 @@ class CTClipTrainer(nn.Module):
             self.scheduler.step()
             self.optim.zero_grad()
 
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                timing['optimizer_step'] = time.time() - t0
+
             self.global_step += 1
             self.eta_calculator.update()
 
-        return loss.item() * self.gradient_accumulation_steps
+        return {
+            'loss': loss.item() * self.gradient_accumulation_steps,
+            'timing': timing
+        }
 
     def validate(self) -> Dict:
         """
@@ -426,7 +486,11 @@ class CTClipTrainer(nn.Module):
         while self.global_step < self.max_steps:
             self.model.train()
 
-            # Get next batch
+            # Get next batch (measure data loading time)
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                data_load_start = time.time()
+
             try:
                 batch = next(dataloader_iter)
             except StopIteration:
@@ -438,9 +502,23 @@ class CTClipTrainer(nn.Module):
                 batch_idx_in_epoch = 0
                 self.print(f"\n--- Epoch {epoch} ---")
 
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                data_load_time = time.time() - data_load_start
+                step_start = time.time()
+            else:
+                data_load_time = 0
+                step_start = 0
+
             # Training step
-            loss = self.train_step(batch, batch_idx_in_epoch)
+            result = self.train_step(batch, batch_idx_in_epoch)
+            loss = result['loss']
+            step_timing = result['timing']
             batch_idx_in_epoch += 1
+
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                total_step_time = time.time() - step_start
 
             # Log every N steps (after accumulation)
             if (batch_idx_in_epoch + 1) % self.gradient_accumulation_steps == 0:
@@ -459,13 +537,64 @@ class CTClipTrainer(nn.Module):
                     )
                     self.print(f"  {memory_info}")
 
+                    # Print detailed timing breakdown if profiling enabled
+                    if self.profile_timing:
+                        self.timing_stats['data_loading'].append(data_load_time)
+                        self.timing_stats['total_step'].append(total_step_time)
+                        for key, value in step_timing.items():
+                            if key in self.timing_stats:
+                                self.timing_stats[key].append(value)
+
+                        # Print detailed breakdown
+                        self.print(f"  📊 Timing Breakdown:")
+                        self.print(f"     Data Loading:     {data_load_time*1000:7.2f}ms ({data_load_time/total_step_time*100:5.1f}%)")
+                        if 'data_to_device' in step_timing:
+                            self.print(f"     Data to Device:   {step_timing['data_to_device']*1000:7.2f}ms ({step_timing['data_to_device']/total_step_time*100:5.1f}%)")
+                        if 'tokenize' in step_timing:
+                            self.print(f"     Tokenize:         {step_timing['tokenize']*1000:7.2f}ms ({step_timing['tokenize']/total_step_time*100:5.1f}%)")
+                        if 'forward' in step_timing:
+                            self.print(f"     Forward Pass:     {step_timing['forward']*1000:7.2f}ms ({step_timing['forward']/total_step_time*100:5.1f}%)")
+                        if 'backward' in step_timing:
+                            self.print(f"     Backward Pass:    {step_timing['backward']*1000:7.2f}ms ({step_timing['backward']/total_step_time*100:5.1f}%)")
+                        if 'optimizer_step' in step_timing:
+                            self.print(f"     Optimizer Step:   {step_timing['optimizer_step']*1000:7.2f}ms ({step_timing['optimizer_step']/total_step_time*100:5.1f}%)")
+                        self.print(f"     ─────────────────────────────────────────")
+                        self.print(f"     Total Step Time:  {total_step_time*1000:7.2f}ms (100.0%)")
+
+                        # Print average statistics every 100 steps
+                        if self.global_step % 100 == 0 and len(self.timing_stats['total_step']) > 0:
+                            self.print(f"\n  📊 Average Timing (last 100 steps):")
+                            avg_data_load = np.mean(self.timing_stats['data_loading'][-100:])
+                            avg_total = np.mean(self.timing_stats['total_step'][-100:])
+                            avg_data_device = np.mean(self.timing_stats['data_to_device'][-100:]) if self.timing_stats['data_to_device'] else 0
+                            avg_tokenize = np.mean(self.timing_stats['tokenize'][-100:]) if self.timing_stats['tokenize'] else 0
+                            avg_forward = np.mean(self.timing_stats['forward'][-100:]) if self.timing_stats['forward'] else 0
+                            avg_backward = np.mean(self.timing_stats['backward'][-100:]) if self.timing_stats['backward'] else 0
+                            avg_optim = np.mean(self.timing_stats['optimizer_step'][-100:]) if self.timing_stats['optimizer_step'] else 0
+
+                            self.print(f"     Data Loading:     {avg_data_load*1000:7.2f}ms ({avg_data_load/avg_total*100:5.1f}%)")
+                            self.print(f"     Data to Device:   {avg_data_device*1000:7.2f}ms ({avg_data_device/avg_total*100:5.1f}%)")
+                            self.print(f"     Tokenize:         {avg_tokenize*1000:7.2f}ms ({avg_tokenize/avg_total*100:5.1f}%)")
+                            self.print(f"     Forward Pass:     {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
+                            self.print(f"     Backward Pass:    {avg_backward*1000:7.2f}ms ({avg_backward/avg_total*100:5.1f}%)")
+                            self.print(f"     Optimizer Step:   {avg_optim*1000:7.2f}ms ({avg_optim/avg_total*100:5.1f}%)")
+                            self.print(f"     ─────────────────────────────────────────")
+                            self.print(f"     Total Step Time:  {avg_total*1000:7.2f}ms (100.0%)\n")
+
                     # Log to logger
-                    self.logger.log_metrics({
+                    log_dict = {
                         'loss': loss,
                         'learning_rate': current_lr,
                         'epoch': current_epoch_float,
                         'step_time': avg_step_time,
-                    }, step=self.global_step, prefix='train')
+                    }
+                    if self.profile_timing:
+                        log_dict.update({
+                            'timing/data_loading': data_load_time,
+                            'timing/total_step': total_step_time,
+                        })
+                        log_dict.update({f'timing/{k}': v for k, v in step_timing.items()})
+                    self.logger.log_metrics(log_dict, step=self.global_step, prefix='train')
 
                 # Validation
                 if self.global_step > 0 and self.global_step % self.eval_every_n_steps == 0:
