@@ -114,6 +114,9 @@ logging:
 
   log_every_n_steps: 10
 
+  # Performance profiling
+  profile_timing: false  # Print detailed timing breakdown (data loading, forward, backward, optimizer)
+
 # Device configuration
 device:
   use_cuda: true

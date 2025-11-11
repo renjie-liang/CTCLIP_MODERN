@@ -5,7 +5,7 @@ import os
 
 def get_gpu_memory():
     """
-    Get GPU memory usage
+    Get GPU memory usage (actual used memory, not just allocated)
 
     Returns:
         str: Formatted GPU memory usage string
@@ -17,11 +17,15 @@ def get_gpu_memory():
     gpu_info = []
 
     for i in range(device_count):
-        allocated = torch.cuda.memory_allocated(i) / 1024**3  # GB
-        reserved = torch.cuda.memory_reserved(i) / 1024**3    # GB
-        total = torch.cuda.get_device_properties(i).total_memory / 1024**3  # GB
+        # Use mem_get_info() for actual memory usage (more accurate than memory_allocated)
+        free_mem, total_mem = torch.cuda.mem_get_info(i)
+        used_mem = total_mem - free_mem
 
-        gpu_info.append(f"GPU{i}: {allocated:.2f}/{total:.2f}GB")
+        used_gb = used_mem / 1024**3  # GB
+        total_gb = total_mem / 1024**3  # GB
+        percent = (used_mem / total_mem) * 100
+
+        gpu_info.append(f"GPU{i}: {used_gb:.2f}/{total_gb:.2f}GB ({percent:.1f}%)")
 
     return " | ".join(gpu_info)
 
