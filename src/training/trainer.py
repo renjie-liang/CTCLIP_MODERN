@@ -492,9 +492,10 @@ class CTClipTrainer(nn.Module):
         while self.global_step < self.max_steps:
             self.model.train()
 
-            # Get next batch (measure data loading time)
+            # Get next batch (measure TOTAL step time including data loading)
             if self.profile_timing:
                 torch.cuda.synchronize()
+                step_start = time.time()  # Start timing BEFORE data loading
                 data_load_start = time.time()
 
             try:
@@ -511,10 +512,8 @@ class CTClipTrainer(nn.Module):
             if self.profile_timing:
                 torch.cuda.synchronize()
                 data_load_time = time.time() - data_load_start
-                step_start = time.time()
             else:
                 data_load_time = 0
-                step_start = 0
 
             # Training step
             result = self.train_step(batch, batch_idx_in_epoch)
@@ -524,7 +523,7 @@ class CTClipTrainer(nn.Module):
 
             if self.profile_timing:
                 torch.cuda.synchronize()
-                total_step_time = time.time() - step_start
+                total_step_time = time.time() - step_start  # Total = data loading + GPU ops
 
             # Log every N steps (after accumulation)
             if (batch_idx_in_epoch + 1) % self.gradient_accumulation_steps == 0:
