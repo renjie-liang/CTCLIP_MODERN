@@ -64,15 +64,19 @@ class CTReportWebDataset:
         shuffle: bool = True,
         buffer_size: int = 1000,
         use_embedding: bool = False,
-        mode: str = "train"
+        mode: str = "train",
+        preprocessed: bool = False
     ):
         self.shard_pattern = shard_pattern
         self.shuffle = shuffle
         self.buffer_size = buffer_size
         self.use_embedding = use_embedding
         self.mode = mode
+        self.preprocessed = preprocessed  # If True, data is already preprocessed
 
         print(f"[{self.mode.upper()}] Initializing WebDataset from: {shard_pattern}")
+        if self.preprocessed:
+            print(f"[{self.mode.upper()}] ⚡ Using PREPROCESSED mode (fast loading, no CPU preprocessing)")
 
         # Verify shards exist
         shard_dir = Path(shard_pattern).parent
@@ -207,6 +211,60 @@ class CTReportWebDataset:
 
         return tensor
 
+    def _decode_sample_preprocessed(self, sample):
+        """
+        Decode a preprocessed sample from WebDataset (FAST - no CPU preprocessing).
+
+        Preprocessed volumes are already:
+        - Resized to uniform spacing
+        - Normalized to [-1, 1] range
+        - Cropped/padded to (480, 480, 240)
+        - Saved as float16
+
+        Only need to:
+        1. Read volume data (~50ms)
+        2. Convert to float32
+        3. Permute (H,W,D) -> (D,H,W) (~0.01ms)
+        4. Add channel dimension (~0.001ms)
+
+        Total: ~50-100ms (vs ~1200ms for full preprocessing)
+        """
+        try:
+            # Load metadata (simplified)
+            metadata = json.loads(sample['json'].decode('utf-8'))
+            study_id = metadata['study_id']
+
+            # Load preprocessed volume - already in final shape (480, 480, 240) float16
+            volume_data = np.frombuffer(sample['bin'], dtype=np.float16).reshape(480, 480, 240)
+
+            # Convert to float32 tensor
+            volume_tensor = torch.from_numpy(volume_data).float()  # (480, 480, 240)
+
+            # Permute (H, W, D) -> (D, H, W)
+            volume_tensor = volume_tensor.permute(2, 0, 1)  # (240, 480, 480)
+
+            # Add channel dimension
+            volume_tensor = volume_tensor.unsqueeze(0)  # (1, 240, 480, 480)
+
+            # Load report text
+            report_text = sample['txt'].decode('utf-8')
+            report_text = self._clean_text(report_text)
+
+            # Load labels
+            labels = np.frombuffer(sample['labels'], dtype=np.float32)
+
+            # No embedding in preprocessed mode
+            embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
+
+            return volume_tensor, report_text, labels, study_id, embed_tensor
+
+        except Exception as e:
+            study_id = metadata.get('study_id', 'unknown') if 'metadata' in locals() else 'unknown'
+            print(f"ERROR decoding preprocessed sample {study_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
     def _decode_sample(self, sample):
         """
         Decode a single sample from WebDataset.
@@ -285,11 +343,14 @@ class CTReportWebDataset:
         Returns:
             DataLoader compatible object
         """
+        # Choose decode function based on preprocessed mode
+        decode_func = self._decode_sample_preprocessed if self.preprocessed else self._decode_sample
+
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
-            # Don't use .decode() - we handle all decoding manually in _decode_sample
-            .map(self._decode_sample)  # Custom decoding and processing
+            # Don't use .decode() - we handle all decoding manually
+            .map(decode_func)  # Custom decoding (fast if preprocessed=True)
             .batched(batch_size)  # Create batches
         )
 
@@ -320,11 +381,14 @@ class CTReportWebDataset:
         # shardshuffle should be False or a positive integer (not True)
         shard_shuffle = 100 if self.shuffle else False
 
+        # Choose decode function based on preprocessed mode
+        decode_func = self._decode_sample_preprocessed if self.preprocessed else self._decode_sample
+
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=shard_shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
-            # Don't use .decode() - we handle all decoding manually in _decode_sample
-            .map(self._decode_sample)
+            # Don't use .decode() - we handle all decoding manually
+            .map(decode_func)  # Custom decoding (fast if preprocessed=True)
         )
 
         # Build DataLoader kwargs
