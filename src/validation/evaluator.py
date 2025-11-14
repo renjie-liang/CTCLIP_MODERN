@@ -120,13 +120,22 @@ class DiseaseEvaluator:
 
         # 计算每个类别的指标
         per_class_metrics = {}
+        skipped_classes = []  # Track classes with single-class issue
 
         for i, class_name in enumerate(self.pathology_classes):
             y_true = labels[:, i]
             y_score = predictions[:, i]
 
+            # Check if only one class present
+            if len(np.unique(y_true)) < 2:
+                skipped_classes.append(class_name)
+
             class_metrics = self._evaluate_single_class(y_true, y_score)
             per_class_metrics[class_name] = class_metrics
+
+        # Print summary if classes were skipped
+        if skipped_classes and verbose:
+            print(f"⚠️  {len(skipped_classes)}/{self.num_classes} classes skipped due to single-class samples: {skipped_classes[:3]}{'...' if len(skipped_classes) > 3 else ''}")
 
         # 聚合指标（macro average）
         results = aggregate_metrics(per_class_metrics, self.pathology_classes)
