@@ -141,11 +141,13 @@ def verify_samples(original_dataset, preprocessed_dataset, num_samples=10):
         prep_labels = prep_labels[0]  # (num_classes,)
 
         # Compare volumes
+        # Note: float16 precision is ~3-4 significant digits (~0.001 for values in [-1, 1])
+        # We use atol=5e-4 (0.0005) to account for float16 conversion while still being strict
         volume_match = compare_tensors(
             orig_volume, prep_volume,
             name=f"Volume [{orig_id_str}]",
-            rtol=1e-4,  # Slightly relaxed due to float16 conversion
-            atol=1e-4
+            rtol=1e-4,  # Relative tolerance for large values
+            atol=5e-4   # Absolute tolerance accounting for float16 precision
         )
 
         # Compare labels
