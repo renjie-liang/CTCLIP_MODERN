@@ -19,6 +19,9 @@ from sklearn.metrics import (
 )
 import warnings
 
+# Suppress repeated warnings for single-class issues
+warnings.filterwarnings('ignore', message='Only one class present in y_true')
+
 
 def compute_auroc(y_true: np.ndarray, y_score: np.ndarray) -> float:
     """
