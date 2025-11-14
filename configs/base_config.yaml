@@ -50,6 +50,7 @@ model:
     temporal_depth: 4
     dim_head: 32
     heads: 8
+    profile_timing: false  # Enable detailed CTViT profiling (print timing for each component)
 
   # Text Encoder (BiomedBERT)
   text_encoder:

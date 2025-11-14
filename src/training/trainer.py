@@ -444,7 +444,13 @@ class CTClipTrainer(nn.Module):
                     predicted_labels.append(output[0].detach().cpu().numpy())
 
                 all_predictions.append(predicted_labels)
-                all_labels.append(disease_labels.detach().cpu().numpy()[0])
+
+                # Handle both tensor and numpy array inputs (WebDataset returns numpy)
+                if isinstance(disease_labels, torch.Tensor):
+                    all_labels.append(disease_labels.detach().cpu().numpy()[0])
+                else:
+                    # Already numpy array from WebDataset
+                    all_labels.append(disease_labels[0])
 
         # Convert to numpy arrays
         all_labels = np.array(all_labels)

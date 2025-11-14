@@ -35,6 +35,7 @@ Key Features:
 """
 
 import copy
+import time
 from pathlib import Path
 from typing import Union, Tuple, Optional
 
@@ -98,7 +99,8 @@ class CTViT(nn.Module):
         heads: int = 8,
         channels: int = 1,
         attn_dropout: float = 0.,
-        ff_dropout: float = 0.
+        ff_dropout: float = 0.,
+        profile_timing: bool = False
     ):
         """
         初始化CTViT模型
@@ -120,6 +122,12 @@ class CTViT(nn.Module):
         patch_height, patch_width = self.patch_size
 
         self.temporal_patch_size = temporal_patch_size
+
+        # ===== Performance Profiling =====
+        self.profile_timing = profile_timing
+        if self.profile_timing:
+            print("⚠️  CTViT: Performance profiling enabled")
+        self.timing_buffer = {}
 
         # 检查尺寸是否能被patch size整除
         image_height, image_width = self.image_size
@@ -228,27 +236,83 @@ class CTViT(nn.Module):
         # ===== 空间编码 (Spatial Encoding) =====
         # 对每个时间帧独立做空间注意力
         # (B, T', H', W', D) -> (B*T', H'*W', D)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['rearrange_spatial_in'] = time.time() - t_start
+
         # 计算空间位置偏置
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         attn_bias = self.spatial_rel_pos_bias(h, w, device=tokens.device)
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['spatial_pos_bias'] = time.time() - t_start
+
         # 空间Transformer
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = self.enc_spatial_transformer(tokens, attn_bias=attn_bias, video_shape=video_shape)
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['spatial_transformer'] = time.time() - t_start
+
         # Reshape回4D: (B*T', H'*W', D) -> (B, T', H', W', D)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = rearrange(tokens, '(b t) (h w) d -> b t h w d', b=b, h=h, w=w)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['rearrange_spatial_out'] = time.time() - t_start
 
         # ===== 时间编码 (Temporal Encoding) =====
         # 对同一空间位置的时间序列做注意力
         # (B, T', H', W', D) -> (B*H'*W', T', D)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = rearrange(tokens, 'b t h w d -> (b h w) t d')
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['rearrange_temporal_in'] = time.time() - t_start
+
         # 时间Transformer
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = self.enc_temporal_transformer(tokens, video_shape=video_shape)
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['temporal_transformer'] = time.time() - t_start
+
         # Reshape回4D: (B*H'*W', T', D) -> (B, T', H', W', D)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = rearrange(tokens, '(b h w) t d -> b t h w d', b=b, h=h, w=w)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['rearrange_temporal_out'] = time.time() - t_start
 
         return tokens
 
@@ -345,18 +409,44 @@ class CTViT(nn.Module):
         assert not exists(mask) or mask.shape[-1] == f, \
             f"Mask temporal dimension {mask.shape[-1]} doesn't match video frames {f}"
 
+        # Clear timing buffer
+        if self.profile_timing:
+            self.timing_buffer.clear()
+            torch.cuda.synchronize()
+            forward_start = time.time()
+
         # ===== 1. Patch Embedding =====
         # (B, C, T, H, W) -> (B, T', H', W', D)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = self.to_patch_emb(video)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['patch_embedding'] = time.time() - t_start
 
         # 保存shape信息
         *_, h, w, _ = tokens.shape
 
         # ===== 2. 编码 (Spatial -> Temporal) =====
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens = self.encode(tokens)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['encode_total'] = time.time() - t_start
 
         # ===== 3. Vector Quantization =====
         # Flatten tokens: (B, T', H', W', D) -> (B, T'*H'*W', D)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         tokens, packed_fhw_shape = pack([tokens], 'b * d')
 
         # 计算VQ mask (如果提供了时间mask)
@@ -370,6 +460,10 @@ class CTViT(nn.Module):
         # commit_loss: VQ承诺损失
         tokens, indices, commit_loss = self.vq(tokens, mask=vq_mask)
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['vector_quantization'] = time.time() - t_start
+
         # 如果只需要返回codebook索引
         if return_only_codebook_ids:
             indices, = unpack(indices, packed_fhw_shape, 'b *')
@@ -380,6 +474,11 @@ class CTViT(nn.Module):
 
         # 如果只需要返回编码后的tokens
         if return_encoded_tokens:
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                total_time = time.time() - forward_start
+                self.timing_buffer['total_forward'] = total_time
+                self._print_timing_stats()
             return tokens
 
         # ===== 4. 解码 (Temporal -> Spatial -> Pixels) =====
@@ -405,6 +504,39 @@ class CTViT(nn.Module):
         # ===== 6. 返回结果 =====
         # 返回: (重建损失, VQ承诺损失, 重建video)
         return recon_loss, commit_loss, recon_video
+
+    def _print_timing_stats(self):
+        """Print detailed timing breakdown of CTViT forward pass"""
+        if not self.timing_buffer:
+            return
+
+        total_time = self.timing_buffer.get('total_forward', 0)
+
+        print("\n" + "="*80)
+        print("🔍 CTViT Timing Breakdown")
+        print("="*80)
+
+        # Main stages
+        print("\nMain Stages:")
+        for key in ['patch_embedding', 'encode_total', 'vector_quantization']:
+            if key in self.timing_buffer:
+                t = self.timing_buffer[key] * 1000  # Convert to ms
+                pct = (self.timing_buffer[key] / total_time * 100) if total_time > 0 else 0
+                print(f"  {key:25s}: {t:8.2f}ms ({pct:5.1f}%)")
+
+        # Detailed encode breakdown
+        print("\nDetailed Encode Breakdown:")
+        for key in ['spatial_transformer', 'temporal_transformer', 'spatial_pos_bias',
+                    'rearrange_spatial_in', 'rearrange_spatial_out',
+                    'rearrange_temporal_in', 'rearrange_temporal_out']:
+            if key in self.timing_buffer:
+                t = self.timing_buffer[key] * 1000
+                pct = (self.timing_buffer[key] / total_time * 100) if total_time > 0 else 0
+                print(f"  {key:25s}: {t:8.2f}ms ({pct:5.1f}%)")
+
+        print(f"\n{'─'*80}")
+        print(f"  {'Total CTViT Forward':25s}: {total_time*1000:8.2f}ms (100.0%)")
+        print("="*80 + "\n")
 
     def calculate_video_token_mask(self, videos: torch.Tensor, video_frame_mask: torch.Tensor) -> torch.Tensor:
         """
