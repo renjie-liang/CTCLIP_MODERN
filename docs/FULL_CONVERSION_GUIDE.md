@@ -22,7 +22,7 @@ python scripts/convert_npz_to_webdataset.py \
   --reports_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/train_reports.csv \
   --meta_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/metadata/train_metadata.csv \
   --labels_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv \
-  --output_dir /path/to/webdataset/train \
+  --output_dir /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_webdataset \
   --samples_per_shard 100 \
   --num_workers 16 \
   --test_mode \
@@ -53,10 +53,10 @@ python scripts/convert_npz_to_webdataset.py \
   --meta_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/metadata/train_metadata.csv \
   --labels_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv \
   --output_dir /path/to/webdataset/train_batch1 \
-  --samples_per_shard 100 \
+  --samples_per_shard 150 \
   --num_workers 16 \
   --delete_source_files \
-  --yes  # 自动确认（谨慎使用）
+  --yes  
 
 # 等第一批成功后，继续下一批...
 ```
@@ -76,11 +76,25 @@ python scripts/convert_npz_to_webdataset.py \
   --reports_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/train_reports.csv \
   --meta_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/metadata/train_metadata.csv \
   --labels_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv \
-  --output_dir /path/to/webdataset/train_full \
-  --samples_per_shard 100 \
+  --output_dir /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_webdataset \
+  --samples_per_shard 150 \
   --num_workers 16 \
-  --delete_source_files
+  --delete_source_files \
+  --yes  
+
+
 ```
+
+python scripts/convert_npz_to_webdataset.py \
+  --data_folder /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_npz \
+  --reports_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/validation_reports.csv \
+  --meta_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/metadata/validation_metadata.csv \
+  --labels_file /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv \
+  --output_dir /orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_webdataset \
+  --samples_per_shard 50 \
+  --num_workers 8 \
+  --yes
+
 
 **交互式确认**：
 ```

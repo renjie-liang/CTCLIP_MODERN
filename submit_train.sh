@@ -4,7 +4,7 @@
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=40
+#SBATCH --cpus-per-task=30
 #SBATCH --mem=200gb
 #SBATCH --time=72:00:00
 #SBATCH --account=xujie
@@ -52,9 +52,9 @@ echo "========================================"
 echo "Config file: configs/base_config.yaml"
 echo "Data format: WebDataset (float16)"
 echo "Mixed precision: Enabled (fp16)"
-echo "Batch size: 32"
-echo "Num workers: 32"
-echo "Max steps: 10000"
+echo "Batch size: 8"
+echo "Num workers: 24"
+echo "Max steps: 100000"
 echo "========================================"
 echo ""
 

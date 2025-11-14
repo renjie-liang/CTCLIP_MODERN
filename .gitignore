@@ -8,3 +8,4 @@ saves
 *.txt
 *__pycache__
 RJ.md
+out_slurm
