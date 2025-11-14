@@ -44,11 +44,44 @@ sys.path.insert(0, str(project_root))
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import webdataset as wds
 from tqdm import tqdm
 from huggingface_hub import list_repo_files, hf_hub_download
 
-from src.data.transforms import resize_array
+
+def resize_array(array, current_spacing, target_spacing):
+    """
+    Resize the array to match the target spacing.
+
+    Args:
+        array (torch.Tensor): Input array to be resized.
+        current_spacing (tuple): Current voxel spacing (z_spacing, xy_spacing, xy_spacing).
+        target_spacing (tuple): Target voxel spacing (target_z_spacing, target_x_spacing, target_y_spacing).
+
+    Returns:
+        torch.Tensor: Resized array.
+    """
+    # Add batch and channel dimensions if needed
+    if array.ndim == 3:
+        array = array.unsqueeze(0).unsqueeze(0)  # (D, H, W) -> (1, 1, D, H, W)
+        squeeze_output = True
+    else:
+        squeeze_output = False
+
+    original_shape = array.shape[2:]
+    scaling_factors = [
+        current_spacing[i] / target_spacing[i] for i in range(len(original_shape))
+    ]
+    new_shape = [
+        int(original_shape[i] * scaling_factors[i]) for i in range(len(original_shape))
+    ]
+    resized_array = F.interpolate(array, size=new_shape, mode='trilinear', align_corners=False)
+
+    if squeeze_output:
+        resized_array = resized_array.squeeze(0).squeeze(0)  # (1, 1, D, H, W) -> (D, H, W)
+
+    return resized_array
 
 
 def get_hf_file_list(repo_id: str, split: str) -> List[str]:
