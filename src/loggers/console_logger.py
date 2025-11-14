@@ -57,7 +57,19 @@ class ConsoleLogger(BaseLogger):
         header = " - ".join(header_parts)
 
         # 格式化指标
-        metrics_str = ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        metrics_parts = []
+        for k, v in metrics.items():
+            if isinstance(v, dict):
+                # Skip nested dicts in console output (too verbose)
+                continue
+            elif isinstance(v, (int, float)):
+                # Format numbers with 4 decimal places
+                metrics_parts.append(f"{k}: {v:.4f}")
+            else:
+                # Other types: convert to string
+                metrics_parts.append(f"{k}: {v}")
+
+        metrics_str = ", ".join(metrics_parts)
 
         # 打印
         if header:
