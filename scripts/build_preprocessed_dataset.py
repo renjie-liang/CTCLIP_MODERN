@@ -3,15 +3,18 @@
 Build preprocessed WebDataset directly from Hugging Face.
 
 This script:
-1. Lists all files on HF (dataset/train_fixed/*.npz, dataset/valid_fixed/*.npz)
-2. Groups them into shards (e.g., 128 samples per shard)
-3. Checks which shards are missing in local preprocessed webdataset
-4. For missing shards:
-   - Downloads the npz files
-   - Processes them (rescale, clip, resize, normalize, crop/pad)
+1. Lists all .nii.gz files on HF (dataset/train_fixed/*.nii.gz, dataset/valid_fixed/*.nii.gz)
+2. Downloads CSV files (metadata, labels, reports) for the split
+3. Groups .nii.gz files into shards (e.g., 128 samples per shard)
+4. Checks which shards are missing in local preprocessed webdataset
+5. For missing shards:
+   - Downloads the .nii.gz files
+   - Reads with nibabel
+   - Gets metadata/labels/reports from CSVs
+   - Processes volumes (rescale, clip, resize, normalize, crop/pad)
    - Saves as WebDataset tar
    - Deletes downloaded files
-5. Generates manifest.json for each split
+6. Generates manifest.json for each split
 
 Usage:
     # Process validation set
@@ -43,6 +46,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import numpy as np
+import pandas as pd
+import nibabel as nib
 import torch
 import torch.nn.functional as F
 import webdataset as wds
@@ -86,26 +91,73 @@ def resize_array(array, current_spacing, target_spacing):
 
 def get_hf_file_list(repo_id: str, split: str) -> List[str]:
     """
-    Get list of npz files from Hugging Face for a specific split.
+    Get list of nii.gz files from Hugging Face for a specific split.
 
     Args:
         repo_id: HuggingFace repo ID
         split: 'train' or 'valid'
 
     Returns:
-        List of file paths (e.g., 'dataset/train_fixed/sample_001.npz')
+        List of file paths (e.g., 'dataset/train_fixed/sample_001.nii.gz')
     """
     print(f"📋 Listing files from {repo_id} (split={split})...")
 
     all_files = list_repo_files(repo_id=repo_id, repo_type="dataset")
 
-    # Filter by split
+    # Filter by split - look for .nii.gz files
     prefix = f"dataset/{split}_fixed/"
-    split_files = [f for f in all_files if f.startswith(prefix) and f.endswith('.npz')]
+    split_files = [f for f in all_files if f.startswith(prefix) and f.endswith('.nii.gz')]
 
     print(f"   Found {len(split_files)} {split} files")
 
     return sorted(split_files)
+
+
+def load_csv_files(repo_id: str, split: str, temp_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Download and load CSV files (metadata, labels, reports) from Hugging Face.
+
+    Args:
+        repo_id: HuggingFace repo ID
+        split: 'train' or 'valid'
+        temp_dir: Temporary directory for downloads
+
+    Returns:
+        Tuple of (metadata_df, labels_df, reports_df)
+    """
+    print(f"📥 Downloading CSV files for {split} split...")
+
+    # Define CSV file paths on HuggingFace
+    csv_files = {
+        'metadata': f'dataset/{split}_metadata.csv',
+        'labels': f'dataset/{split}_labels.csv',
+        'reports': f'dataset/{split}_reports.csv'
+    }
+
+    dfs = {}
+    for name, file_path in csv_files.items():
+        try:
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=file_path,
+                repo_type="dataset",
+                local_dir=temp_dir,
+                local_dir_use_symlinks=False
+            )
+            df = pd.read_csv(local_path)
+
+            # Set index to VolumeName (without .nii.gz extension)
+            if 'VolumeName' in df.columns:
+                df['study_id'] = df['VolumeName'].str.replace('.nii.gz', '')
+                df = df.set_index('study_id')
+
+            dfs[name] = df
+            print(f"   ✅ Loaded {name}: {len(df)} records")
+        except Exception as e:
+            print(f"   ❌ Failed to load {name}: {e}")
+            raise
+
+    return dfs['metadata'], dfs['labels'], dfs['reports']
 
 
 def group_files_into_shards(files: List[str], samples_per_shard: int) -> List[List[str]]:
@@ -288,7 +340,10 @@ def process_shard(
     shard_files: List[str],
     repo_id: str,
     output_dir: Path,
-    temp_dir: Path
+    temp_dir: Path,
+    metadata_df: pd.DataFrame,
+    labels_df: pd.DataFrame,
+    reports_df: pd.DataFrame
 ) -> Dict:
     """
     Process one shard: download → process → save → delete.
@@ -299,6 +354,9 @@ def process_shard(
         repo_id: HuggingFace repo ID
         output_dir: Output directory for WebDataset
         temp_dir: Temporary download directory
+        metadata_df: Metadata DataFrame (indexed by study_id)
+        labels_df: Labels DataFrame (indexed by study_id)
+        reports_df: Reports DataFrame (indexed by study_id)
 
     Returns:
         Dict with processing stats
@@ -319,23 +377,53 @@ def process_shard(
             for filename in sorted(local_paths.keys()):
                 local_path = local_paths[filename]
 
-                # Load npz file
-                data = np.load(local_path, allow_pickle=True)
+                # Generate study ID from filename (e.g., 'sample_001.nii.gz' -> 'sample_001')
+                study_id = filename.replace('.nii.gz', '')
 
-                # Extract data
-                volume_data = data['image']  # (H, W, D) float16
-                report_text = str(data['findings'])
-                disease_labels = data['labels'].astype(np.float32)
+                # Load nii.gz file with nibabel
+                nii_img = nib.load(str(local_path))
+                volume_data = nii_img.get_fdata().astype(np.float32)  # (H, W, D)
 
-                # Extract metadata
+                # Get spacing from NIfTI header
+                header = nii_img.header
+                pixdim = header['pixdim'][1:4]  # [x_spacing, y_spacing, z_spacing]
+                xy_spacing = float(pixdim[0])  # Assume x and y are the same
+                z_spacing = float(pixdim[2])
+
+                # Get metadata from CSV
+                if study_id not in metadata_df.index:
+                    print(f"   ⚠️  Skipping {study_id}: not found in metadata")
+                    continue
+
+                meta_row = metadata_df.loc[study_id]
+                slope = float(meta_row.get('RescaleSlope', 1.0))
+                intercept = float(meta_row.get('RescaleIntercept', 0.0))
+
+                # Get labels from CSV
+                if study_id not in labels_df.index:
+                    print(f"   ⚠️  Skipping {study_id}: not found in labels")
+                    continue
+
+                label_row = labels_df.loc[study_id]
+                # Extract disease labels (assuming columns after 'VolumeName')
+                disease_labels = label_row.values.astype(np.float32)
+
+                # Get report from CSV
+                if study_id not in reports_df.index:
+                    print(f"   ⚠️  Skipping {study_id}: not found in reports")
+                    continue
+
+                report_row = reports_df.loc[study_id]
+                findings = str(report_row.get('Findings_EN', ''))
+                impressions = str(report_row.get('Impressions_EN', ''))
+                report_text = findings + ' ' + impressions
+
+                # Prepare metadata for preprocessing
                 metadata = {
-                    'spacing': data['spacing'].tolist(),
-                    'RescaleSlope': float(data.get('RescaleSlope', 1.0)),
-                    'RescaleIntercept': float(data.get('RescaleIntercept', 0.0))
+                    'spacing': [z_spacing, xy_spacing, xy_spacing],
+                    'RescaleSlope': slope,
+                    'RescaleIntercept': intercept
                 }
-
-                # Generate study ID from filename (e.g., 'sample_001.npz' -> 'sample_001')
-                study_id = filename.replace('.npz', '')
 
                 # Preprocess volume
                 preprocessed_volume = preprocess_volume(volume_data, metadata)
@@ -495,7 +583,21 @@ def main():
         generate_manifest(output_dir, args.split, len(shards))
         return 0
 
-    # 4. Process missing shards
+    # 4. Load CSV files (metadata, labels, reports)
+    print(f"\n📚 Loading CSV files...")
+    with tempfile.TemporaryDirectory(prefix=f"ct_rate_csv_") as csv_temp_dir:
+        csv_temp_path = Path(csv_temp_dir)
+        metadata_df, labels_df, reports_df = load_csv_files(
+            args.repo_id,
+            args.split,
+            csv_temp_path
+        )
+
+    print(f"   Loaded metadata: {len(metadata_df)} records")
+    print(f"   Loaded labels: {len(labels_df)} records")
+    print(f"   Loaded reports: {len(reports_df)} records")
+
+    # 5. Process missing shards
     print(f"\n🔄 Processing {len(missing_shards)} missing shards...")
 
     # Create temporary directory
@@ -512,7 +614,10 @@ def main():
                     shards[shard_idx],
                     args.repo_id,
                     output_dir,
-                    temp_path
+                    temp_path,
+                    metadata_df,
+                    labels_df,
+                    reports_df
                 )
                 futures[future] = shard_idx
 
@@ -541,10 +646,10 @@ def main():
 
             pbar.close()
 
-    # 5. Generate manifest
+    # 6. Generate manifest
     generate_manifest(output_dir, args.split, len(shards))
 
-    # 6. Summary
+    # 7. Summary
     print("\n" + "="*80)
     print("Summary")
     print("="*80)
