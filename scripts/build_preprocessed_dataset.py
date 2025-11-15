@@ -128,10 +128,12 @@ def load_csv_files(repo_id: str, split: str, temp_dir: Path) -> Tuple[pd.DataFra
     print(f"📥 Downloading CSV files for {split} split...")
 
     # Define CSV file paths on HuggingFace
+    # Note: validation uses 'validation_' prefix for metadata/reports but 'valid_' for labels
+    split_name = 'validation' if split == 'valid' else split
     csv_files = {
-        'metadata': f'dataset/{split}_metadata.csv',
-        'labels': f'dataset/{split}_labels.csv',
-        'reports': f'dataset/{split}_reports.csv'
+        'metadata': f'dataset/metadata/{split_name}_metadata.csv',
+        'labels': f'dataset/multi_abnormality_labels/{split}_predicted_labels.csv',
+        'reports': f'dataset/radiology_text_reports/{split_name}_reports.csv'
     }
 
     dfs = {}
