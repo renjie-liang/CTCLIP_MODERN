@@ -152,6 +152,8 @@ def load_csv_files(repo_id: str, split: str, temp_dir: Path) -> Tuple[pd.DataFra
             if 'VolumeName' in df.columns:
                 df['study_id'] = df['VolumeName'].str.replace('.nii.gz', '')
                 df = df.set_index('study_id')
+                # Drop the original VolumeName column to avoid type conversion issues
+                df = df.drop('VolumeName', axis=1, errors='ignore')
 
             dfs[name] = df
             print(f"   ✅ Loaded {name}: {len(df)} records")
