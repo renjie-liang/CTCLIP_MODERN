@@ -38,6 +38,7 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import List, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -463,11 +464,19 @@ def process_shard(
         if output_path.exists():
             output_path.unlink()
 
+        # Get detailed traceback
+        error_detail = {
+            'message': str(e),
+            'type': type(e).__name__,
+            'traceback': traceback.format_exc()
+        }
+
         return {
             'shard_idx': shard_idx,
             'num_samples': 0,
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'error_detail': error_detail
         }
 
 
@@ -642,7 +651,18 @@ def main():
                     })
                 else:
                     fail_count += 1
-                    print(f"\n❌ Shard {result['shard_idx']:06d} failed: {result.get('error', 'Unknown error')}")
+                    error_msg = result.get('error', 'Unknown error')
+                    print(f"\n❌ Shard {result['shard_idx']:06d} failed: {error_msg}")
+
+                    # Print detailed error for first few failures
+                    if fail_count <= 3 and 'error_detail' in result:
+                        detail = result['error_detail']
+                        print(f"   Error type: {detail['type']}")
+                        print(f"   Traceback:")
+                        for line in detail['traceback'].split('\n')[-10:]:  # Last 10 lines
+                            if line.strip():
+                                print(f"     {line}")
+
                     pbar.set_postfix({
                         'success': success_count,
                         'failed': fail_count
