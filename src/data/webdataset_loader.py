@@ -115,7 +115,8 @@ class CTReportWebDataset:
             study_id = metadata['study_id']
 
             # Load preprocessed volume - already in final shape (480, 480, 240) float16
-            volume_data = np.frombuffer(sample['bin'], dtype=np.float16).reshape(480, 480, 240)
+            # Use .copy() to create writable array and avoid PyTorch warning
+            volume_data = np.frombuffer(sample['bin'], dtype=np.float16).reshape(480, 480, 240).copy()
 
             # Convert to float32 tensor
             volume_tensor = torch.from_numpy(volume_data).float()  # (480, 480, 240)
@@ -130,8 +131,8 @@ class CTReportWebDataset:
             report_text = sample['txt'].decode('utf-8')
             report_text = self._clean_text(report_text)
 
-            # Load labels
-            labels = np.frombuffer(sample['labels'], dtype=np.float32)
+            # Load labels (copy to avoid read-only warning)
+            labels = np.frombuffer(sample['labels'], dtype=np.float32).copy()
 
             # No embedding in standard mode
             embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
