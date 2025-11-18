@@ -11,8 +11,8 @@ experiment:
 # 数据配置
 data:
   # WebDataset format paths (using float16 for optimized I/O)
-  webdataset_shards_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_webdataset/shard-{000000..000314}.tar"
-  webdataset_shards_val: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_webdataset/shard-{000000..000059}.tar"
+  webdataset_shards_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_preprocessed_webdataset/shard-{000000..000368}.tar"
+  webdataset_shards_val: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_preprocessed_webdataset/shard-{000000..000060}.tar"
   shuffle_buffer_size: 100  # Reduced for debugging
 
   reports_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/train_reports.csv"
