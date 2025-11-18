@@ -7,8 +7,9 @@ set -e  # Exit on error
 # Configuration
 REPO_ID="ibrahimhamamci/CT-RATE"
 BASE_DIR="/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset"
+TEMP_DIR="/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/temp"  # Custom temp directory (instead of /tmp)
 SAMPLES_PER_SHARD=128
-NUM_WORKERS=8
+NUM_WORKERS=1  # Use 1 for debugging (single-threaded with detailed errors)
 
 echo "=========================================="
 echo "Build Preprocessed CT-RATE Dataset"
@@ -24,7 +25,8 @@ python scripts/build_preprocessed_dataset.py \
     --output-dir "$BASE_DIR/valid_preprocessed_webdataset" \
     --repo-id "$REPO_ID" \
     --samples-per-shard $SAMPLES_PER_SHARD \
-    --num-workers $NUM_WORKERS
+    --num-workers $NUM_WORKERS \
+    --temp-dir "$TEMP_DIR"
 
 echo ""
 echo "✅ Validation set completed!"
@@ -37,7 +39,8 @@ python scripts/build_preprocessed_dataset.py \
     --output-dir "$BASE_DIR/train_preprocessed_webdataset" \
     --repo-id "$REPO_ID" \
     --samples-per-shard $SAMPLES_PER_SHARD \
-    --num-workers $NUM_WORKERS
+    --num-workers $NUM_WORKERS \
+    --temp-dir "$TEMP_DIR"
 
 echo ""
 echo "✅ Training set completed!"
