@@ -1,35 +1,20 @@
 #!/usr/bin/env python3
 """
-Build preprocessed WebDataset directly from Hugging Face.
+Build preprocessed WebDataset directly from Hugging Face (Simplified version).
 
 This script:
-1. Lists all .nii.gz files on HF (dataset/train_fixed/*.nii.gz, dataset/valid_fixed/*.nii.gz)
-2. Downloads CSV files (metadata, labels, reports) for the split
-3. Groups .nii.gz files into shards (e.g., 128 samples per shard)
-4. Checks which shards are missing in local preprocessed webdataset
-5. For missing shards:
-   - Downloads the .nii.gz files
-   - Reads with nibabel
-   - Gets metadata/labels/reports from CSVs
-   - Processes volumes (rescale, clip, resize, normalize, crop/pad)
-   - Saves as WebDataset tar
-   - Deletes downloaded files
-6. Generates manifest.json for each split
+1. Lists all .nii.gz files on HF
+2. Scans existing shards to find what's already processed
+3. Processes only missing files
+4. Supports appending to the last incomplete shard
+5. Single-threaded, simple, easy to debug
 
 Usage:
-    # Process validation set
-    python scripts/build_preprocessed_dataset.py \
-        --split valid \
-        --output-dir /path/to/valid_preprocessed_webdataset \
-        --samples-per-shard 128 \
-        --num-workers 8
-
-    # Process training set
     python scripts/build_preprocessed_dataset.py \
         --split train \
-        --output-dir /path/to/train_preprocessed_webdataset \
-        --samples-per-shard 128 \
-        --num-workers 16
+        --output-dir /path/to/output \
+        --repo-id ibrahimhamamci/CT-RATE \
+        --temp-dir /path/to/temp
 """
 
 import argparse
@@ -38,11 +23,9 @@ import os
 import shutil
 import sys
 import tempfile
-import traceback
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Set, Tuple, Optional
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -133,7 +116,7 @@ def get_hf_file_list(repo_id: str, split: str) -> List[str]:
     prefix = f"dataset/{split}_fixed/"
     split_files = [f for f in all_files if f.startswith(prefix) and f.endswith('.nii.gz')]
 
-    print(f"   Found {len(split_files)} {split} files")
+    print(f"   Found {len(split_files)} {split} files on HuggingFace")
 
     return sorted(split_files)
 
@@ -153,7 +136,6 @@ def load_csv_files(repo_id: str, split: str, temp_dir: Path) -> Tuple[pd.DataFra
     print(f"📥 Downloading CSV files for {split} split...")
 
     # Define CSV file paths on HuggingFace
-    # Note: validation uses 'validation_' prefix for metadata/reports but 'valid_' for labels
     split_name = 'validation' if split == 'valid' else split
     csv_files = {
         'metadata': f'dataset/metadata/{split_name}_metadata.csv',
@@ -163,129 +145,30 @@ def load_csv_files(repo_id: str, split: str, temp_dir: Path) -> Tuple[pd.DataFra
 
     dfs = {}
     for name, file_path in csv_files.items():
-        try:
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=file_path,
-                repo_type="dataset",
-                local_dir=temp_dir,
-                local_dir_use_symlinks=False
-            )
-            df = pd.read_csv(local_path)
+        local_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=file_path,
+            repo_type="dataset",
+            local_dir=temp_dir,
+            local_dir_use_symlinks=False
+        )
+        df = pd.read_csv(local_path)
 
-            # Set index to VolumeName (without .nii.gz extension)
-            if 'VolumeName' in df.columns:
-                df['study_id'] = df['VolumeName'].str.replace('.nii.gz', '')
-                df = df.set_index('study_id')
-                # Drop the original VolumeName column to avoid type conversion issues
-                df = df.drop('VolumeName', axis=1, errors='ignore')
+        # Set index to VolumeName (without .nii.gz extension)
+        if 'VolumeName' in df.columns:
+            df['study_id'] = df['VolumeName'].str.replace('.nii.gz', '')
+            df = df.set_index('study_id')
+            df = df.drop('VolumeName', axis=1, errors='ignore')
 
-            dfs[name] = df
-            print(f"   ✅ Loaded {name}: {len(df)} records")
-        except Exception as e:
-            print(f"   ❌ Failed to load {name}: {e}")
-            raise
+        dfs[name] = df
+        print(f"   ✅ Loaded {name}: {len(df)} records")
 
     return dfs['metadata'], dfs['labels'], dfs['reports']
-
-
-def group_files_into_shards(files: List[str], samples_per_shard: int) -> List[List[str]]:
-    """
-    Group files into shards.
-
-    Args:
-        files: List of file paths
-        samples_per_shard: Number of samples per shard
-
-    Returns:
-        List of shards, where each shard is a list of file paths
-    """
-    shards = []
-    for i in range(0, len(files), samples_per_shard):
-        shard_files = files[i:i + samples_per_shard]
-        shards.append(shard_files)
-
-    print(f"📦 Grouped {len(files)} files into {len(shards)} shards ({samples_per_shard} samples/shard)")
-
-    return shards
-
-
-def check_existing_shards(output_dir: Path, num_shards: int) -> List[int]:
-    """
-    Check which shards already exist.
-
-    Args:
-        output_dir: Output directory
-        num_shards: Total number of shards
-
-    Returns:
-        List of missing shard indices
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    missing = []
-    for i in range(num_shards):
-        shard_path = output_dir / f"shard-{i:06d}.tar"
-        if not shard_path.exists():
-            missing.append(i)
-
-    print(f"✅ Found {num_shards - len(missing)}/{num_shards} existing shards")
-    print(f"⚠️  Missing {len(missing)} shards")
-
-    return missing
-
-
-def download_files(repo_id: str, files: List[str], temp_dir: Path) -> Dict[str, Path]:
-    """
-    Download files from HuggingFace to temporary directory.
-
-    Args:
-        repo_id: HuggingFace repo ID
-        files: List of file paths to download
-        temp_dir: Temporary directory
-
-    Returns:
-        Dict mapping filename to local path
-    """
-    local_paths = {}
-
-    for file_path in files:
-        try:
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=file_path,
-                repo_type="dataset",
-                local_dir=temp_dir,
-                local_dir_use_symlinks=False
-            )
-
-            # Extract just the filename (e.g., 'sample_001.npz')
-            filename = os.path.basename(file_path)
-            local_paths[filename] = Path(local_path)
-
-        except Exception as e:
-            print(f"\n❌ Failed to download {file_path}: {e}")
-            raise
-
-    return local_paths
 
 
 def preprocess_volume(volume_data: np.ndarray, metadata: dict) -> np.ndarray:
     """
     Apply all preprocessing steps to raw volume data.
-
-    This replicates the processing in webdataset_loader.py's _process_volume():
-    1. Convert to float32
-    2. Apply rescale slope/intercept
-    3. Clip to [-1000, 1000] HU
-    4. Transpose to (D, H, W)
-    5. Resize to target spacing
-    6. Normalize to [-1, 1] range
-    7. Crop/pad to (480, 480, 240)
-    8. Convert to float16
-    9. Transpose back to (H, W, D) for storage
-
-    NOTE: Permute and unsqueeze are NOT done here - they will be done in DataLoader
 
     Args:
         volume_data: Raw volume data (any shape, float16)
@@ -355,7 +238,6 @@ def preprocess_volume(volume_data: np.ndarray, metadata: dict) -> np.ndarray:
         )
 
     # 8. Transpose back to (H, W, D) for storage
-    # WebDataset will store as (H, W, D), and loader will permute to (D, H, W) at runtime
     tensor = tensor.permute(1, 2, 0)  # (D, H, W) -> (H, W, D)
 
     # 9. Convert to float16 for storage efficiency
@@ -364,50 +246,299 @@ def preprocess_volume(volume_data: np.ndarray, metadata: dict) -> np.ndarray:
     return result  # Shape: (480, 480, 240) as float16
 
 
-def process_shard(
-    shard_idx: int,
-    shard_files: List[str],
-    repo_id: str,
-    output_dir: Path,
-    temp_dir: Path,
-    metadata_df: pd.DataFrame,
-    labels_df: pd.DataFrame,
-    reports_df: pd.DataFrame
-) -> Dict:
+def get_existing_samples(output_dir: Path) -> Set[str]:
     """
-    Process one shard: download → process → save → delete.
+    Scan all existing shards and return set of already processed study_ids.
 
     Args:
-        shard_idx: Shard index
-        shard_files: List of HF file paths for this shard
-        repo_id: HuggingFace repo ID
-        output_dir: Output directory for WebDataset
-        temp_dir: Temporary download directory
-        metadata_df: Metadata DataFrame (indexed by study_id)
-        labels_df: Labels DataFrame (indexed by study_id)
-        reports_df: Reports DataFrame (indexed by study_id)
+        output_dir: Directory containing shard-*.tar files
 
     Returns:
-        Dict with processing stats
+        Set of study_ids that have been processed
     """
-    shard_name = f"shard-{shard_idx:06d}"
-    output_path = output_dir / f"{shard_name}.tar"
+    existing = set()
 
-    # Create temporary subdirectory for this shard
-    shard_temp_dir = temp_dir / shard_name
-    shard_temp_dir.mkdir(parents=True, exist_ok=True)
+    if not output_dir.exists():
+        return existing
 
+    shard_files = sorted(output_dir.glob("shard-*.tar"))
+
+    if not shard_files:
+        return existing
+
+    print(f"🔍 Scanning {len(shard_files)} existing shards...")
+
+    for shard_path in tqdm(shard_files, desc="Scanning shards", unit="shard"):
+        try:
+            dataset = wds.WebDataset(str(shard_path))
+            for sample in dataset:
+                study_id = sample.get('__key__', '')
+                if study_id:
+                    if study_id in existing:
+                        print(f"   ⚠️  Warning: Duplicate study_id '{study_id}' found in {shard_path.name}")
+                    existing.add(study_id)
+        except Exception as e:
+            print(f"   ⚠️  Warning: Failed to read {shard_path.name}: {e}")
+            continue
+
+    print(f"   Found {len(existing)} already processed samples")
+
+    return existing
+
+
+def infer_samples_per_shard(output_dir: Path) -> int:
+    """
+    Infer SAMPLES_PER_SHARD from the first shard.
+
+    Args:
+        output_dir: Directory containing shard-*.tar files
+
+    Returns:
+        Number of samples per shard (default 128 if no shards exist)
+    """
+    first_shard = output_dir / "shard-000000.tar"
+
+    if not first_shard.exists():
+        print(f"⚠️  First shard not found, using default SAMPLES_PER_SHARD=128")
+        return 128
+
+    count = 0
     try:
-        # 1. Download files
-        local_paths = download_files(repo_id, shard_files, shard_temp_dir)
+        dataset = wds.WebDataset(str(first_shard))
+        for _ in dataset:
+            count += 1
+    except Exception as e:
+        print(f"⚠️  Failed to read first shard: {e}, using default SAMPLES_PER_SHARD=128")
+        return 128
 
-        # 2. Process and write to WebDataset
-        with wds.TarWriter(str(output_path)) as sink:
-            for filename in sorted(local_paths.keys()):
-                local_path = local_paths[filename]
+    print(f"📊 Inferred SAMPLES_PER_SHARD = {count} (from {first_shard.name})")
+    return count
 
-                # Generate study ID from filename (e.g., 'sample_001.nii.gz' -> 'sample_001')
-                study_id = filename.replace('.nii.gz', '')
+
+def get_last_shard_info(output_dir: Path) -> Tuple[int, List[Dict], int]:
+    """
+    Get information about the last shard.
+
+    Args:
+        output_dir: Directory containing shard-*.tar files
+
+    Returns:
+        Tuple of (last_shard_index, samples_in_last_shard, count_in_last_shard)
+        - If no shards exist, returns (-1, [], 0)
+        - samples_in_last_shard: List of sample dicts from the last shard
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    shard_files = sorted(output_dir.glob("shard-*.tar"))
+
+    if not shard_files:
+        return (-1, [], 0)
+
+    last_shard = shard_files[-1]
+
+    # Extract shard index from filename (e.g., shard-000315.tar -> 315)
+    shard_idx = int(last_shard.stem.split('-')[1])
+
+    # Read all samples from last shard
+    samples = []
+    try:
+        dataset = wds.WebDataset(str(last_shard))
+        for sample in dataset:
+            samples.append(sample)
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to read last shard {last_shard.name}: {e}")
+        return (shard_idx, [], 0)
+
+    count = len(samples)
+    print(f"📦 Last shard: {last_shard.name} ({count} samples)")
+
+    return (shard_idx, samples, count)
+
+
+def generate_manifest(output_dir: Path, split: str) -> Path:
+    """
+    Generate manifest.json by scanning all existing shards.
+
+    Args:
+        output_dir: Output directory
+        split: 'train' or 'valid'
+
+    Returns:
+        Path to manifest.json
+    """
+    manifest_path = output_dir / "manifest.json"
+
+    # Count total samples
+    total_samples = 0
+    shard_info = []
+
+    shard_files = sorted(output_dir.glob("shard-*.tar"))
+
+    for shard_path in shard_files:
+        # Extract shard index
+        shard_idx = int(shard_path.stem.split('-')[1])
+
+        # Count samples in this shard
+        num_samples = 0
+        try:
+            dataset = wds.WebDataset(str(shard_path))
+            for _ in dataset:
+                num_samples += 1
+        except:
+            num_samples = 0
+
+        total_samples += num_samples
+        shard_info.append({
+            'shard_index': shard_idx,
+            'filename': shard_path.name,
+            'num_samples': num_samples,
+            'size_bytes': shard_path.stat().st_size
+        })
+
+    # Generate manifest
+    manifest = {
+        'dataset': 'CT-RATE',
+        'split': split,
+        'format': 'webdataset',
+        'preprocessed': True,
+        'total_shards': len(shard_files),
+        'total_samples': total_samples,
+        'sample_shape': [480, 480, 240],
+        'sample_dtype': 'float16',
+        'num_classes': 18,
+        'shards': shard_info
+    }
+
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"\n📄 Generated manifest: {manifest_path}")
+    print(f"   Total samples: {total_samples}")
+    print(f"   Total shards: {len(shard_files)}")
+
+    return manifest_path
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build preprocessed WebDataset from Hugging Face (Simplified)"
+    )
+    parser.add_argument('--split', type=str, required=True, choices=['train', 'valid'],
+                        help='Dataset split to process')
+    parser.add_argument('--output-dir', type=str, required=True,
+                        help='Output directory for preprocessed WebDataset')
+    parser.add_argument('--repo-id', type=str, default='ibrahimhamamci/CT-RATE',
+                        help='HuggingFace repo ID (default: ibrahimhamamci/CT-RATE)')
+    parser.add_argument('--temp-dir', type=str, default=None,
+                        help='Temporary directory for downloads (default: system /tmp)')
+
+    args = parser.parse_args()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Setup temp directory
+    if args.temp_dir:
+        temp_base_dir = Path(args.temp_dir)
+        temp_base_dir.mkdir(parents=True, exist_ok=True)
+        print(f"🗂️  Using custom temp dir: {temp_base_dir}")
+    else:
+        temp_base_dir = None
+        print(f"🗂️  Using system temp dir: /tmp")
+
+    print("="*80)
+    print("Build Preprocessed WebDataset from Hugging Face")
+    print("="*80)
+    print(f"Repo ID: {args.repo_id}")
+    print(f"Split: {args.split}")
+    print(f"Output dir: {output_dir}")
+    print()
+
+    # 1. Get file list from HuggingFace
+    hf_files = get_hf_file_list(args.repo_id, args.split)
+
+    if len(hf_files) == 0:
+        print(f"❌ No files found for split '{args.split}'")
+        return 1
+
+    # Convert to study_ids
+    hf_study_ids = set()
+    for file_path in hf_files:
+        filename = os.path.basename(file_path)
+        study_id = filename.replace('.nii.gz', '')
+        hf_study_ids.add(study_id)
+
+    print(f"   Total files on HF: {len(hf_study_ids)}")
+
+    # 2. Scan existing shards
+    existing_study_ids = get_existing_samples(output_dir)
+
+    # 3. Calculate missing files
+    missing_study_ids = hf_study_ids - existing_study_ids
+    missing_files = [f for f in hf_files if os.path.basename(f).replace('.nii.gz', '') in missing_study_ids]
+
+    print(f"\n📊 Status:")
+    print(f"   Already processed: {len(existing_study_ids)}")
+    print(f"   Missing: {len(missing_study_ids)}")
+
+    if len(missing_study_ids) == 0:
+        print("\n✅ All files already processed!")
+        generate_manifest(output_dir, args.split)
+        return 0
+
+    # 4. Infer SAMPLES_PER_SHARD
+    samples_per_shard = infer_samples_per_shard(output_dir)
+
+    # 5. Get last shard info
+    last_shard_idx, last_shard_samples, last_shard_count = get_last_shard_info(output_dir)
+
+    # 6. Load CSV files
+    print(f"\n📚 Loading CSV files...")
+    with managed_temp_dir(temp_base_dir, f"ct_rate_csv") as csv_temp_dir:
+        csv_temp_path = Path(csv_temp_dir)
+        metadata_df, labels_df, reports_df = load_csv_files(
+            args.repo_id,
+            args.split,
+            csv_temp_path
+        )
+
+    print(f"   Loaded metadata: {len(metadata_df)} records")
+    print(f"   Loaded labels: {len(labels_df)} records")
+    print(f"   Loaded reports: {len(reports_df)} records")
+
+    # 7. Process missing files (single-threaded)
+    print(f"\n🔄 Processing {len(missing_files)} missing files...")
+
+    with managed_temp_dir(temp_base_dir, f"ct_rate_{args.split}") as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Prepare for writing
+        current_shard_idx = last_shard_idx + 1 if last_shard_idx >= 0 else 0
+        current_samples = list(last_shard_samples)  # Copy samples from last shard if incomplete
+
+        # If last shard was incomplete, we'll rewrite it
+        if last_shard_count > 0 and last_shard_count < samples_per_shard:
+            current_shard_idx = last_shard_idx
+            print(f"   ♻️  Will append to incomplete shard-{current_shard_idx:06d} (currently {last_shard_count}/{samples_per_shard})")
+
+        processed_count = 0
+        failed_count = 0
+
+        pbar = tqdm(missing_files, desc="Processing files", unit="file")
+
+        for hf_file_path in pbar:
+            filename = os.path.basename(hf_file_path)
+            study_id = filename.replace('.nii.gz', '')
+
+            try:
+                # Download file
+                local_path = hf_hub_download(
+                    repo_id=args.repo_id,
+                    filename=hf_file_path,
+                    repo_type="dataset",
+                    local_dir=temp_path,
+                    local_dir_use_symlinks=False
+                )
 
                 # Load nii.gz file with nibabel
                 nii_img = nib.load(str(local_path))
@@ -416,12 +547,13 @@ def process_shard(
                 # Get spacing from NIfTI header
                 header = nii_img.header
                 pixdim = header['pixdim'][1:4]  # [x_spacing, y_spacing, z_spacing]
-                xy_spacing = float(pixdim[0])  # Assume x and y are the same
+                xy_spacing = float(pixdim[0])
                 z_spacing = float(pixdim[2])
 
                 # Get metadata from CSV
                 if study_id not in metadata_df.index:
-                    print(f"   ⚠️  Skipping {study_id}: not found in metadata")
+                    print(f"\n   ⚠️  Skipping {study_id}: not found in metadata")
+                    failed_count += 1
                     continue
 
                 meta_row = metadata_df.loc[study_id]
@@ -430,16 +562,17 @@ def process_shard(
 
                 # Get labels from CSV
                 if study_id not in labels_df.index:
-                    print(f"   ⚠️  Skipping {study_id}: not found in labels")
+                    print(f"\n   ⚠️  Skipping {study_id}: not found in labels")
+                    failed_count += 1
                     continue
 
                 label_row = labels_df.loc[study_id]
-                # Extract disease labels (assuming columns after 'VolumeName')
                 disease_labels = label_row.values.astype(np.float32)
 
                 # Get report from CSV
                 if study_id not in reports_df.index:
-                    print(f"   ⚠️  Skipping {study_id}: not found in reports")
+                    print(f"\n   ⚠️  Skipping {study_id}: not found in reports")
+                    failed_count += 1
                     continue
 
                 report_row = reports_df.loc[study_id]
@@ -457,315 +590,72 @@ def process_shard(
                 # Preprocess volume
                 preprocessed_volume = preprocess_volume(volume_data, metadata)
 
-                # Write to WebDataset
+                # Create sample
                 sample = {
                     '__key__': study_id,
-                    'bin': preprocessed_volume.tobytes(),  # (480, 480, 240) float16
+                    'bin': preprocessed_volume.tobytes(),
                     'txt': report_text,
                     'cls': disease_labels.tobytes(),
                     'json': json.dumps({
                         'study_id': study_id,
-                        'shape': list(preprocessed_volume.shape),  # [480, 480, 240]
+                        'shape': list(preprocessed_volume.shape),
                         'dtype': 'float16',
                         'num_classes': len(disease_labels)
                     })
                 }
-                sink.write(sample)
 
-        # 3. Delete downloaded files
-        shutil.rmtree(shard_temp_dir)
+                # Add to current samples
+                current_samples.append(sample)
+                processed_count += 1
 
-        return {
-            'shard_idx': shard_idx,
-            'num_samples': len(local_paths),
-            'success': True
-        }
+                # Delete downloaded file
+                os.remove(local_path)
 
-    except Exception as e:
-        # Clean up on error
-        if shard_temp_dir.exists():
-            shutil.rmtree(shard_temp_dir)
-        if output_path.exists():
-            output_path.unlink()
-
-        # Get detailed traceback
-        error_detail = {
-            'message': str(e),
-            'type': type(e).__name__,
-            'traceback': traceback.format_exc()
-        }
-
-        return {
-            'shard_idx': shard_idx,
-            'num_samples': 0,
-            'success': False,
-            'error': str(e),
-            'error_detail': error_detail
-        }
-
-
-def generate_manifest(output_dir: Path, split: str, num_shards: int) -> Path:
-    """
-    Generate manifest.json for the dataset.
-
-    Args:
-        output_dir: Output directory
-        split: 'train' or 'valid'
-        num_shards: Total number of shards
-
-    Returns:
-        Path to manifest.json
-    """
-    manifest_path = output_dir / "manifest.json"
-
-    # Count total samples
-    total_samples = 0
-    shard_info = []
-
-    for i in range(num_shards):
-        shard_path = output_dir / f"shard-{i:06d}.tar"
-        if shard_path.exists():
-            # Count samples in this shard
-            num_samples = 0
-            try:
-                dataset = wds.WebDataset(str(shard_path))
-                for _ in dataset:
-                    num_samples += 1
-            except:
-                num_samples = 0
-
-            total_samples += num_samples
-            shard_info.append({
-                'shard_index': i,
-                'filename': f"shard-{i:06d}.tar",
-                'num_samples': num_samples,
-                'size_bytes': shard_path.stat().st_size
-            })
-
-    # Generate manifest
-    manifest = {
-        'dataset': 'CT-RATE',
-        'split': split,
-        'format': 'webdataset',
-        'preprocessed': True,
-        'total_shards': num_shards,
-        'total_samples': total_samples,
-        'sample_shape': [480, 480, 240],
-        'sample_dtype': 'float16',
-        'num_classes': 18,
-        'shards': shard_info
-    }
-
-    with open(manifest_path, 'w') as f:
-        json.dump(manifest, f, indent=2)
-
-    print(f"\n📄 Generated manifest: {manifest_path}")
-    print(f"   Total samples: {total_samples}")
-    print(f"   Total shards: {num_shards}")
-
-    return manifest_path
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Build preprocessed WebDataset from Hugging Face"
-    )
-    parser.add_argument('--split', type=str, required=True, choices=['train', 'valid'],
-                        help='Dataset split to process')
-    parser.add_argument('--output-dir', type=str, required=True,
-                        help='Output directory for preprocessed WebDataset')
-    parser.add_argument('--repo-id', type=str, default='ibrahimhamamci/CT-RATE',
-                        help='HuggingFace repo ID (default: ibrahimhamamci/CT-RATE)')
-    parser.add_argument('--samples-per-shard', type=int, default=128,
-                        help='Number of samples per shard (default: 128)')
-    parser.add_argument('--num-workers', type=int, default=4,
-                        help='Number of parallel workers (default: 4)')
-    parser.add_argument('--temp-dir', type=str, default=None,
-                        help='Temporary directory for downloads (default: system /tmp)')
-    parser.add_argument('--force', action='store_true',
-                        help='Force reprocessing of existing shards')
-
-    args = parser.parse_args()
-
-    output_dir = Path(args.output_dir)
-
-    # Setup temp directory
-    if args.temp_dir:
-        temp_base_dir = Path(args.temp_dir)
-        temp_base_dir.mkdir(parents=True, exist_ok=True)
-        print(f"🗂️  Using custom temp dir: {temp_base_dir}")
-    else:
-        temp_base_dir = None
-        print(f"🗂️  Using system temp dir: /tmp")
-
-    print("="*80)
-    print("Build Preprocessed WebDataset from Hugging Face")
-    print("="*80)
-    print(f"Repo ID: {args.repo_id}")
-    print(f"Split: {args.split}")
-    print(f"Output dir: {output_dir}")
-    print(f"Samples per shard: {args.samples_per_shard}")
-    print(f"Workers: {args.num_workers}")
-    print()
-
-    # 1. Get file list from HuggingFace
-    hf_files = get_hf_file_list(args.repo_id, args.split)
-
-    if len(hf_files) == 0:
-        print(f"❌ No files found for split '{args.split}'")
-        return 1
-
-    # 2. Group into shards
-    shards = group_files_into_shards(hf_files, args.samples_per_shard)
-
-    # 3. Check existing shards
-    if args.force:
-        missing_shards = list(range(len(shards)))
-        print(f"⚡ Force mode: Processing all {len(shards)} shards")
-    else:
-        missing_shards = check_existing_shards(output_dir, len(shards))
-
-    if len(missing_shards) == 0:
-        print("\n✅ All shards already exist! Use --force to reprocess.")
-        # Generate manifest even if no missing shards
-        generate_manifest(output_dir, args.split, len(shards))
-        return 0
-
-    # 4. Load CSV files (metadata, labels, reports)
-    print(f"\n📚 Loading CSV files...")
-    with managed_temp_dir(temp_base_dir, f"ct_rate_csv") as csv_temp_dir:
-        csv_temp_path = Path(csv_temp_dir)
-        metadata_df, labels_df, reports_df = load_csv_files(
-            args.repo_id,
-            args.split,
-            csv_temp_path
-        )
-
-    print(f"   Loaded metadata: {len(metadata_df)} records")
-    print(f"   Loaded labels: {len(labels_df)} records")
-    print(f"   Loaded reports: {len(reports_df)} records")
-
-    # 5. Process missing shards
-    print(f"\n🔄 Processing {len(missing_shards)} missing shards...")
-
-    # Create temporary directory
-    with managed_temp_dir(temp_base_dir, f"ct_rate_{args.split}") as temp_dir:
-        temp_path = Path(temp_dir)
-
-        # Use single-threaded mode for debugging when num_workers=1
-        if args.num_workers == 1:
-            print("🐛 Single-threaded mode (for debugging)")
-            pbar = tqdm(total=len(missing_shards), desc="Processing shards", unit="shard")
-            success_count = 0
-            fail_count = 0
-
-            for shard_idx in missing_shards:
-                result = process_shard(
-                    shard_idx,
-                    shards[shard_idx],
-                    args.repo_id,
-                    output_dir,
-                    temp_path,
-                    metadata_df,
-                    labels_df,
-                    reports_df
-                )
-                pbar.update(1)
-
-                if result['success']:
-                    success_count += 1
-                    pbar.set_postfix({
-                        'success': success_count,
-                        'failed': fail_count
-                    })
-                else:
-                    fail_count += 1
-                    error_msg = result.get('error', 'Unknown error')
-                    print(f"\n❌ Shard {result['shard_idx']:06d} failed: {error_msg}")
-
-                    # Print detailed error in single-threaded mode
-                    if 'error_detail' in result:
-                        detail = result['error_detail']
-                        print(f"   Error type: {detail['type']}")
-                        print(f"   Traceback:")
-                        for line in detail['traceback'].split('\n'):
-                            if line.strip():
-                                print(f"     {line}")
+                # Write shard if full
+                if len(current_samples) >= samples_per_shard:
+                    shard_path = output_dir / f"shard-{current_shard_idx:06d}.tar"
+                    with wds.TarWriter(str(shard_path)) as sink:
+                        for s in current_samples:
+                            sink.write(s)
 
                     pbar.set_postfix({
-                        'success': success_count,
-                        'failed': fail_count
+                        'shard': current_shard_idx,
+                        'processed': processed_count,
+                        'failed': failed_count
                     })
 
-            pbar.close()
+                    # Reset for next shard
+                    current_shard_idx += 1
+                    current_samples = []
 
-        else:
-            # Process shards in parallel
-            with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-                futures = {}
-                for shard_idx in missing_shards:
-                    future = executor.submit(
-                        process_shard,
-                        shard_idx,
-                        shards[shard_idx],
-                        args.repo_id,
-                        output_dir,
-                        temp_path,
-                        metadata_df,
-                        labels_df,
-                        reports_df
-                    )
-                    futures[future] = shard_idx
+            except Exception as e:
+                print(f"\n❌ Failed to process {study_id}: {e}")
+                failed_count += 1
+                continue
 
-                # Track progress
-                pbar = tqdm(total=len(missing_shards), desc="Processing shards", unit="shard")
-                success_count = 0
-                fail_count = 0
+        # Write remaining samples
+        if len(current_samples) > 0:
+            shard_path = output_dir / f"shard-{current_shard_idx:06d}.tar"
+            with wds.TarWriter(str(shard_path)) as sink:
+                for s in current_samples:
+                    sink.write(s)
+            print(f"\n   ✅ Wrote final shard: {shard_path.name} ({len(current_samples)} samples)")
 
-                for future in as_completed(futures):
-                    result = future.result()
-                    pbar.update(1)
+        pbar.close()
 
-                    if result['success']:
-                        success_count += 1
-                        pbar.set_postfix({
-                            'success': success_count,
-                            'failed': fail_count
-                        })
-                    else:
-                        fail_count += 1
-                        error_msg = result.get('error', 'Unknown error')
-                        print(f"\n❌ Shard {result['shard_idx']:06d} failed: {error_msg}")
+    # 8. Generate manifest
+    generate_manifest(output_dir, args.split)
 
-                        # Print detailed error for first few failures
-                        if fail_count <= 3 and 'error_detail' in result:
-                            detail = result['error_detail']
-                            print(f"   Error type: {detail['type']}")
-                            print(f"   Traceback:")
-                            for line in detail['traceback'].split('\n')[-10:]:  # Last 10 lines
-                                if line.strip():
-                                    print(f"     {line}")
-
-                        pbar.set_postfix({
-                            'success': success_count,
-                            'failed': fail_count
-                        })
-
-                pbar.close()
-
-    # 6. Generate manifest
-    generate_manifest(output_dir, args.split, len(shards))
-
-    # 7. Summary
+    # 9. Summary
     print("\n" + "="*80)
     print("Summary")
     print("="*80)
-    print(f"✅ Success: {success_count}/{len(missing_shards)} shards")
-    print(f"❌ Failed: {fail_count}/{len(missing_shards)} shards")
+    print(f"✅ Processed: {processed_count} files")
+    print(f"❌ Failed: {failed_count} files")
     print(f"📁 Output: {output_dir}")
     print("="*80)
 
-    return 0 if fail_count == 0 else 1
+    return 0 if failed_count == 0 else 1
 
 
 if __name__ == "__main__":
