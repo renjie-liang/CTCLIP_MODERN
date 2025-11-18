@@ -595,7 +595,7 @@ def main():
                     '__key__': study_id,
                     'bin': preprocessed_volume.tobytes(),
                     'txt': report_text,
-                    'cls': disease_labels.tobytes(),
+                    'labels': disease_labels.tobytes(),  # Changed from 'cls' to 'labels'
                     'json': json.dumps({
                         'study_id': study_id,
                         'shape': list(preprocessed_volume.shape),
