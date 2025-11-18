@@ -1,6 +1,6 @@
 #!/bin/bash
 # Example script to build preprocessed dataset from Hugging Face
-# This script demonstrates how to use build_preprocessed_dataset.py
+# This script demonstrates how to use build_preprocessed_dataset.py (Simplified version)
 
 set -e  # Exit on error
 
@@ -8,8 +8,6 @@ set -e  # Exit on error
 REPO_ID="ibrahimhamamci/CT-RATE"
 BASE_DIR="/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset"
 TEMP_DIR="/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/temp"  # Custom temp directory (instead of /tmp)
-SAMPLES_PER_SHARD=128
-NUM_WORKERS=1  # Use 1 for debugging (single-threaded with detailed errors)
 
 echo "=========================================="
 echo "Build Preprocessed CT-RATE Dataset"
@@ -24,8 +22,6 @@ python scripts/build_preprocessed_dataset.py \
     --split valid \
     --output-dir "$BASE_DIR/valid_preprocessed_webdataset" \
     --repo-id "$REPO_ID" \
-    --samples-per-shard $SAMPLES_PER_SHARD \
-    --num-workers $NUM_WORKERS \
     --temp-dir "$TEMP_DIR"
 
 echo ""
@@ -38,8 +34,6 @@ python scripts/build_preprocessed_dataset.py \
     --split train \
     --output-dir "$BASE_DIR/train_preprocessed_webdataset" \
     --repo-id "$REPO_ID" \
-    --samples-per-shard $SAMPLES_PER_SHARD \
-    --num-workers $NUM_WORKERS \
     --temp-dir "$TEMP_DIR"
 
 echo ""
@@ -59,6 +53,12 @@ echo ""
 echo "=========================================="
 echo "🎉 All done!"
 echo "=========================================="
+echo "Features:"
+echo "- File-level resume: only processes missing files"
+echo "- Appends to incomplete shards automatically"
+echo "- Single-threaded, simple, easy to debug"
+echo "- Auto-infers SAMPLES_PER_SHARD from existing shards"
+echo ""
 echo "Next steps:"
 echo "1. Update your config to use the preprocessed datasets"
 echo "2. Set preprocessed: true in the config"
