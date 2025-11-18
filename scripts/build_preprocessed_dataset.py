@@ -39,8 +39,9 @@ import shutil
 import sys
 import tempfile
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 project_root = Path(__file__).parent.parent
@@ -54,6 +55,29 @@ import torch.nn.functional as F
 import webdataset as wds
 from tqdm import tqdm
 from huggingface_hub import list_repo_files, hf_hub_download
+
+
+@contextmanager
+def managed_temp_dir(base_dir: Optional[Path], prefix: str):
+    """
+    Context manager for temporary directory.
+    If base_dir is provided, creates a subdirectory there and cleans up after.
+    Otherwise, uses system tempfile.TemporaryDirectory.
+    """
+    if base_dir:
+        # User-specified temp directory
+        temp_path = base_dir / f"{prefix}_{os.getpid()}"
+        temp_path.mkdir(parents=True, exist_ok=True)
+        try:
+            yield str(temp_path)
+        finally:
+            # Cleanup
+            if temp_path.exists():
+                shutil.rmtree(temp_path)
+    else:
+        # System temp directory
+        with tempfile.TemporaryDirectory(prefix=prefix) as temp_dir:
+            yield temp_dir
 
 
 def resize_array(array, current_spacing, target_spacing):
@@ -556,12 +580,23 @@ def main():
                         help='Number of samples per shard (default: 128)')
     parser.add_argument('--num-workers', type=int, default=4,
                         help='Number of parallel workers (default: 4)')
+    parser.add_argument('--temp-dir', type=str, default=None,
+                        help='Temporary directory for downloads (default: system /tmp)')
     parser.add_argument('--force', action='store_true',
                         help='Force reprocessing of existing shards')
 
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
+
+    # Setup temp directory
+    if args.temp_dir:
+        temp_base_dir = Path(args.temp_dir)
+        temp_base_dir.mkdir(parents=True, exist_ok=True)
+        print(f"🗂️  Using custom temp dir: {temp_base_dir}")
+    else:
+        temp_base_dir = None
+        print(f"🗂️  Using system temp dir: /tmp")
 
     print("="*80)
     print("Build Preprocessed WebDataset from Hugging Face")
@@ -598,7 +633,7 @@ def main():
 
     # 4. Load CSV files (metadata, labels, reports)
     print(f"\n📚 Loading CSV files...")
-    with tempfile.TemporaryDirectory(prefix=f"ct_rate_csv_") as csv_temp_dir:
+    with managed_temp_dir(temp_base_dir, f"ct_rate_csv") as csv_temp_dir:
         csv_temp_path = Path(csv_temp_dir)
         metadata_df, labels_df, reports_df = load_csv_files(
             args.repo_id,
@@ -614,15 +649,18 @@ def main():
     print(f"\n🔄 Processing {len(missing_shards)} missing shards...")
 
     # Create temporary directory
-    with tempfile.TemporaryDirectory(prefix=f"ct_rate_{args.split}_") as temp_dir:
+    with managed_temp_dir(temp_base_dir, f"ct_rate_{args.split}") as temp_dir:
         temp_path = Path(temp_dir)
 
-        # Process shards in parallel
-        with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {}
+        # Use single-threaded mode for debugging when num_workers=1
+        if args.num_workers == 1:
+            print("🐛 Single-threaded mode (for debugging)")
+            pbar = tqdm(total=len(missing_shards), desc="Processing shards", unit="shard")
+            success_count = 0
+            fail_count = 0
+
             for shard_idx in missing_shards:
-                future = executor.submit(
-                    process_shard,
+                result = process_shard(
                     shard_idx,
                     shards[shard_idx],
                     args.repo_id,
@@ -632,15 +670,6 @@ def main():
                     labels_df,
                     reports_df
                 )
-                futures[future] = shard_idx
-
-            # Track progress
-            pbar = tqdm(total=len(missing_shards), desc="Processing shards", unit="shard")
-            success_count = 0
-            fail_count = 0
-
-            for future in as_completed(futures):
-                result = future.result()
                 pbar.update(1)
 
                 if result['success']:
@@ -654,12 +683,12 @@ def main():
                     error_msg = result.get('error', 'Unknown error')
                     print(f"\n❌ Shard {result['shard_idx']:06d} failed: {error_msg}")
 
-                    # Print detailed error for first few failures
-                    if fail_count <= 3 and 'error_detail' in result:
+                    # Print detailed error in single-threaded mode
+                    if 'error_detail' in result:
                         detail = result['error_detail']
                         print(f"   Error type: {detail['type']}")
                         print(f"   Traceback:")
-                        for line in detail['traceback'].split('\n')[-10:]:  # Last 10 lines
+                        for line in detail['traceback'].split('\n'):
                             if line.strip():
                                 print(f"     {line}")
 
@@ -669,6 +698,60 @@ def main():
                     })
 
             pbar.close()
+
+        else:
+            # Process shards in parallel
+            with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+                futures = {}
+                for shard_idx in missing_shards:
+                    future = executor.submit(
+                        process_shard,
+                        shard_idx,
+                        shards[shard_idx],
+                        args.repo_id,
+                        output_dir,
+                        temp_path,
+                        metadata_df,
+                        labels_df,
+                        reports_df
+                    )
+                    futures[future] = shard_idx
+
+                # Track progress
+                pbar = tqdm(total=len(missing_shards), desc="Processing shards", unit="shard")
+                success_count = 0
+                fail_count = 0
+
+                for future in as_completed(futures):
+                    result = future.result()
+                    pbar.update(1)
+
+                    if result['success']:
+                        success_count += 1
+                        pbar.set_postfix({
+                            'success': success_count,
+                            'failed': fail_count
+                        })
+                    else:
+                        fail_count += 1
+                        error_msg = result.get('error', 'Unknown error')
+                        print(f"\n❌ Shard {result['shard_idx']:06d} failed: {error_msg}")
+
+                        # Print detailed error for first few failures
+                        if fail_count <= 3 and 'error_detail' in result:
+                            detail = result['error_detail']
+                            print(f"   Error type: {detail['type']}")
+                            print(f"   Traceback:")
+                            for line in detail['traceback'].split('\n')[-10:]:  # Last 10 lines
+                                if line.strip():
+                                    print(f"     {line}")
+
+                        pbar.set_postfix({
+                            'success': success_count,
+                            'failed': fail_count
+                        })
+
+                pbar.close()
 
     # 6. Generate manifest
     generate_manifest(output_dir, args.split, len(shards))
