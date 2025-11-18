@@ -29,7 +29,6 @@ from accelerate.utils import InitProcessGroupKwargs
 from transformers import AutoTokenizer
 
 from ..training import get_optimizer, get_warmup_cosine_schedule
-from ..data import CTReportDataset
 from ..data.webdataset_loader import CTReportWebDataset
 from ..utils import ETACalculator, get_memory_info
 from ..validation import DiseaseEvaluator

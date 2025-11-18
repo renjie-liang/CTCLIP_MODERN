@@ -1,46 +1,22 @@
 """
 WebDataset-based CT Report Dataset for efficient loading.
 
-This provides a drop-in replacement for CTReportDataset that uses WebDataset format
-for significantly faster I/O and reduced storage requirements.
+This dataset loads PREPROCESSED CT volumes from WebDataset TAR files.
+All volumes are already:
+- Resized to uniform spacing (0.75mm x 0.75mm x 1.5mm)
+- Normalized to [-1, 1] range
+- Cropped/padded to (480, 480, 240)
+- Saved as float16 for efficient storage
+
+No CPU preprocessing is performed during loading - data is ready to use.
 """
 
-import os
 import json
-import io
-import time
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional
 import numpy as np
 import torch
-import torch.nn.functional as F
 import webdataset as wds
-
-# Debug mode: set to True to enable detailed timing logs
-DEBUG_TIMING = os.environ.get('DEBUG_TIMING', 'false').lower() == 'true'
-
-
-def resize_array(array, current_spacing, target_spacing):
-    """
-    Resize the array to match the target spacing.
-
-    Args:
-        array (torch.Tensor): Input array to be resized.
-        current_spacing (tuple): Current voxel spacing (z_spacing, xy_spacing, xy_spacing).
-        target_spacing (tuple): Target voxel spacing (target_z_spacing, target_x_spacing, target_y_spacing).
-
-    Returns:
-        np.ndarray: Resized array.
-    """
-    original_shape = array.shape[2:]
-    scaling_factors = [
-        current_spacing[i] / target_spacing[i] for i in range(len(original_shape))
-    ]
-    new_shape = [
-        int(original_shape[i] * scaling_factors[i]) for i in range(len(original_shape))
-    ]
-    resized_array = F.interpolate(array, size=new_shape, mode='trilinear', align_corners=False).cpu().numpy()
-    return resized_array
 
 
 class CTReportWebDataset:
@@ -48,7 +24,7 @@ class CTReportWebDataset:
     WebDataset-based CT Report Dataset.
 
     This class wraps webdataset functionality to provide a PyTorch-compatible dataset
-    for CT volumes and reports stored in WebDataset TAR format.
+    for PREPROCESSED CT volumes and reports stored in WebDataset TAR format.
 
     Args:
         shard_pattern (str): Pattern for shard files (e.g., "/path/to/shards/shard-{000000..000099}.tar")
@@ -64,19 +40,16 @@ class CTReportWebDataset:
         shuffle: bool = True,
         buffer_size: int = 1000,
         use_embedding: bool = False,
-        mode: str = "train",
-        preprocessed: bool = False
+        mode: str = "train"
     ):
         self.shard_pattern = shard_pattern
         self.shuffle = shuffle
         self.buffer_size = buffer_size
         self.use_embedding = use_embedding
         self.mode = mode
-        self.preprocessed = preprocessed  # If True, data is already preprocessed
 
         print(f"[{self.mode.upper()}] Initializing WebDataset from: {shard_pattern}")
-        if self.preprocessed:
-            print(f"[{self.mode.upper()}] ⚡ Using PREPROCESSED mode (fast loading, no CPU preprocessing)")
+        print(f"[{self.mode.upper()}] ⚡ Using PREPROCESSED data (fast loading, no CPU preprocessing)")
 
         # Verify shards exist
         shard_dir = Path(shard_pattern).parent
@@ -118,100 +91,7 @@ class CTReportWebDataset:
         text = text.replace(')', '')
         return text
 
-    def _process_volume(self, volume_data: np.ndarray, metadata: dict) -> torch.Tensor:
-        """
-        Process raw volume data (float16) to final tensor format.
-
-        This replicates the logic from CTReportDataset._load_volume_from_npz
-
-        Args:
-            volume_data (np.ndarray): Raw volume data (float16)
-            metadata (dict): Metadata including spacing information
-
-        Returns:
-            torch.Tensor: Processed volume tensor of shape (1, D, H, W)
-        """
-        # Convert float16 back to float32 for processing
-        img_data = volume_data.astype(np.float32)
-
-        # Get metadata
-        slope = float(metadata["RescaleSlope"])
-        intercept = float(metadata["RescaleIntercept"])
-
-        # Parse XYSpacing (format: "[0.75, 0.75]")
-        xy_spacing_str = str(metadata["XYSpacing"])
-        xy_spacing = float(xy_spacing_str.strip("[]").split(",")[0])
-        z_spacing = float(metadata["ZSpacing"])
-
-        # Define target spacing
-        target_x_spacing = 0.75
-        target_y_spacing = 0.75
-        target_z_spacing = 1.5
-
-        current_spacing = (z_spacing, xy_spacing, xy_spacing)
-        target_spacing = (target_z_spacing, target_x_spacing, target_y_spacing)
-
-        # Apply rescale slope and intercept
-        img_data = slope * img_data + intercept
-
-        # Clip to HU range
-        hu_min, hu_max = -1000, 1000
-        img_data = np.clip(img_data, hu_min, hu_max)
-
-        # Transpose to (D, H, W)
-        img_data = img_data.transpose(2, 0, 1)
-
-        # Convert to tensor and add batch/channel dims
-        tensor = torch.tensor(img_data, dtype=torch.float32)
-        tensor = tensor.unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, D, H, W)
-
-        # Resize to target spacing
-        img_data = resize_array(tensor, current_spacing, target_spacing)
-        img_data = img_data[0][0]  # Remove batch and channel dims
-        img_data = np.transpose(img_data, (1, 2, 0))  # (H, W, D)
-
-        # Normalize to [-1, 1] range
-        img_data = (img_data / 1000).astype(np.float32)
-
-        tensor = torch.tensor(img_data)
-
-        # Crop/pad to target shape (480, 480, 240)
-        target_shape = (480, 480, 240)
-        h, w, d = tensor.shape
-        dh, dw, dd = target_shape
-
-        # Calculate crop/pad indices
-        h_start = max((h - dh) // 2, 0)
-        h_end = min(h_start + dh, h)
-        w_start = max((w - dw) // 2, 0)
-        w_end = min(w_start + dw, w)
-        d_start = max((d - dd) // 2, 0)
-        d_end = min(d_start + dd, d)
-
-        # Crop
-        tensor = tensor[h_start:h_end, w_start:w_end, d_start:d_end]
-
-        # Pad if necessary
-        pad_h_before = (dh - tensor.size(0)) // 2
-        pad_h_after = dh - tensor.size(0) - pad_h_before
-        pad_w_before = (dw - tensor.size(1)) // 2
-        pad_w_after = dw - tensor.size(1) - pad_w_before
-        pad_d_before = (dd - tensor.size(2)) // 2
-        pad_d_after = dd - tensor.size(2) - pad_d_before
-
-        tensor = torch.nn.functional.pad(
-            tensor,
-            (pad_d_before, pad_d_after, pad_w_before, pad_w_after, pad_h_before, pad_h_after),
-            value=-1
-        )
-
-        # Permute to (D, H, W) and add channel dim
-        tensor = tensor.permute(2, 0, 1)  # (D, H, W)
-        tensor = tensor.unsqueeze(0)      # (1, D, H, W)
-
-        return tensor
-
-    def _decode_sample_preprocessed(self, sample):
+    def _decode_sample(self, sample):
         """
         Decode a preprocessed sample from WebDataset (FAST - no CPU preprocessing).
 
@@ -253,7 +133,7 @@ class CTReportWebDataset:
             # Load labels
             labels = np.frombuffer(sample['labels'], dtype=np.float32)
 
-            # No embedding in preprocessed mode
+            # No embedding in standard mode
             embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
 
             return volume_tensor, report_text, labels, study_id, embed_tensor
@@ -261,72 +141,6 @@ class CTReportWebDataset:
         except Exception as e:
             study_id = metadata.get('study_id', 'unknown') if 'metadata' in locals() else 'unknown'
             print(f"ERROR decoding preprocessed sample {study_id}: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-
-    def _decode_sample(self, sample):
-        """
-        Decode a single sample from WebDataset.
-
-        WebDataset provides samples as dicts with keys like 'bin', 'json', 'txt', 'labels'.
-        """
-        sample_start = time.time() if DEBUG_TIMING else None
-
-        try:
-            # Load metadata first (contains shape info for volume reconstruction)
-            t0 = time.time()
-            metadata = json.loads(sample['json'].decode('utf-8'))
-            study_id = metadata['study_id']
-            if DEBUG_TIMING:
-                print(f"[{study_id}] Metadata decode: {time.time()-t0:.4f}s")
-
-            # Load volume data (stored as raw bytes, reconstruct from shape and dtype)
-            t0 = time.time()
-            volume_shape = tuple(metadata['volume_shape'])
-            volume_dtype = np.dtype(metadata['volume_dtype'])
-            volume_data = np.frombuffer(sample['bin'], dtype=volume_dtype).reshape(volume_shape)
-            if DEBUG_TIMING:
-                print(f"[{study_id}] Volume decode: {time.time()-t0:.4f}s (shape={volume_shape})")
-
-            # Load report text
-            t0 = time.time()
-            report_text = sample['txt'].decode('utf-8')
-            report_text = self._clean_text(report_text)
-            if DEBUG_TIMING:
-                print(f"[{study_id}] Report decode: {time.time()-t0:.4f}s")
-
-            # Load labels (binary data, decode as float32 array)
-            t0 = time.time()
-            labels = np.frombuffer(sample['labels'], dtype=np.float32)
-            if DEBUG_TIMING:
-                print(f"[{study_id}] Labels decode: {time.time()-t0:.4f}s")
-
-            # Process volume
-            if self.use_embedding:
-                # For embedding mode, volume_data is already the embedding
-                t0 = time.time()
-                embed_tensor = torch.from_numpy(volume_data.astype(np.float32))
-                volume_tensor = torch.empty(0, dtype=embed_tensor.dtype)
-                if DEBUG_TIMING:
-                    print(f"[{study_id}] Embedding convert: {time.time()-t0:.4f}s")
-            else:
-                # Process volume from float16 to final format
-                t0 = time.time()
-                volume_tensor = self._process_volume(volume_data, metadata)
-                embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
-                if DEBUG_TIMING:
-                    print(f"[{study_id}] Volume process: {time.time()-t0:.4f}s")
-
-            if DEBUG_TIMING:
-                print(f"[{study_id}] TOTAL decode time: {time.time()-sample_start:.4f}s\n")
-
-            return volume_tensor, report_text, labels, study_id, embed_tensor
-
-        except Exception as e:
-            # Enhanced error reporting
-            study_id = metadata.get('study_id', 'unknown') if 'metadata' in locals() else 'unknown'
-            print(f"ERROR decoding sample {study_id}: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -343,14 +157,10 @@ class CTReportWebDataset:
         Returns:
             DataLoader compatible object
         """
-        # Choose decode function based on preprocessed mode
-        decode_func = self._decode_sample_preprocessed if self.preprocessed else self._decode_sample
-
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
-            # Don't use .decode() - we handle all decoding manually
-            .map(decode_func)  # Custom decoding (fast if preprocessed=True)
+            .map(self._decode_sample)  # Fast decoding of preprocessed data
             .batched(batch_size)  # Create batches
         )
 
@@ -372,7 +182,7 @@ class CTReportWebDataset:
 
     def create_pytorch_dataloader(self, batch_size: int, num_workers: int = 4, prefetch_factor: int = 2):
         """
-        Alternative: Create a standard PyTorch DataLoader with WebDataset as IterableDataset.
+        Create a standard PyTorch DataLoader with WebDataset as IterableDataset.
 
         This provides better compatibility with existing training code.
         """
@@ -381,14 +191,10 @@ class CTReportWebDataset:
         # shardshuffle should be False or a positive integer (not True)
         shard_shuffle = 100 if self.shuffle else False
 
-        # Choose decode function based on preprocessed mode
-        decode_func = self._decode_sample_preprocessed if self.preprocessed else self._decode_sample
-
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=shard_shuffle, empty_check=False)
             .shuffle(self.buffer_size if self.shuffle else 0)
-            # Don't use .decode() - we handle all decoding manually
-            .map(decode_func)  # Custom decoding (fast if preprocessed=True)
+            .map(self._decode_sample)  # Fast decoding of preprocessed data
         )
 
         # Build DataLoader kwargs

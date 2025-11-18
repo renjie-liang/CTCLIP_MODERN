@@ -10,12 +10,17 @@ experiment:
 
 # 数据配置
 data:
-  # WebDataset format paths (using float16 for optimized I/O)
+  # WebDataset format paths - PREPROCESSED data (no CPU processing needed)
+  # All volumes are already:
+  #   - Resized to uniform spacing (0.75mm x 0.75mm x 1.5mm)
+  #   - Normalized to [-1, 1] range
+  #   - Cropped/padded to (480, 480, 240)
+  #   - Saved as float16 for efficient I/O (~50-100ms load time per sample)
   webdataset_shards_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_preprocessed_webdataset/shard-{000000..000368}.tar"
   webdataset_shards_val: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_preprocessed_webdataset/shard-{000000..000060}.tar"
   shuffle_buffer_size: 1000  # Buffer size for shuffling in WebDataset mode
 
-  # Legacy NPZ paths (kept for reference - data deleted)
+  # Legacy NPZ paths (DEPRECATED - data deleted, use WebDataset instead)
   # train_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_npz"
   # valid_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_npz"
 
@@ -30,7 +35,7 @@ data:
 
   # DataLoader配置
   batch_size: 8
-  num_workers: 24
+  num_workers: 12  # Reduced from 24 since no CPU preprocessing needed
   prefetch_factor: 2  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false

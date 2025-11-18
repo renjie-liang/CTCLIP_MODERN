@@ -16,7 +16,7 @@ from transformers import AutoTokenizer, AutoModel
 
 from src.models.ctvit import CTViT
 from src.models.ct_clip import CTCLIP
-from src.data import CTReportDataset
+from src.data.webdataset_loader import CTReportWebDataset
 from src.validation import DiseaseEvaluator
 from src.utils.config import load_config
 from src.utils.seed import set_seed
