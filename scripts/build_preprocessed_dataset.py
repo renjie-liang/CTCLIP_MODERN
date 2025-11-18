@@ -270,7 +270,7 @@ def get_existing_samples(output_dir: Path) -> Set[str]:
 
     for shard_path in tqdm(shard_files, desc="Scanning shards", unit="shard"):
         try:
-            dataset = wds.WebDataset(str(shard_path))
+            dataset = wds.WebDataset(str(shard_path), shardshuffle=False)
             for sample in dataset:
                 # Read study_id from json metadata (same as DataLoader)
                 metadata = json.loads(sample['json'].decode('utf-8'))
@@ -306,7 +306,7 @@ def infer_samples_per_shard(output_dir: Path) -> int:
 
     count = 0
     try:
-        dataset = wds.WebDataset(str(first_shard))
+        dataset = wds.WebDataset(str(first_shard), shardshuffle=False)
         for _ in dataset:
             count += 1
     except Exception as e:
@@ -344,7 +344,7 @@ def get_last_shard_info(output_dir: Path) -> Tuple[int, List[Dict], int]:
     # Read all samples from last shard
     samples = []
     try:
-        dataset = wds.WebDataset(str(last_shard))
+        dataset = wds.WebDataset(str(last_shard), shardshuffle=False)
         for sample in dataset:
             samples.append(sample)
     except Exception as e:
@@ -383,7 +383,7 @@ def generate_manifest(output_dir: Path, split: str) -> Path:
         # Count samples in this shard
         num_samples = 0
         try:
-            dataset = wds.WebDataset(str(shard_path))
+            dataset = wds.WebDataset(str(shard_path), shardshuffle=False)
             for _ in dataset:
                 num_samples += 1
         except:
@@ -474,7 +474,7 @@ def main():
 
     # 2. Scan existing shards
     existing_study_ids = get_existing_samples(output_dir)
-
+    
     # 3. Calculate missing files
     missing_study_ids = hf_study_ids - existing_study_ids
     missing_files = [f for f in hf_files if os.path.basename(f).replace('.nii.gz', '') in missing_study_ids]

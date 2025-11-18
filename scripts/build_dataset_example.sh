@@ -13,7 +13,7 @@ echo "=========================================="
 echo "Build Preprocessed CT-RATE Dataset"
 echo "=========================================="
 echo "Repo: $REPO_ID"
-echo "Base dir: $BASE_DIR"
+echo "Base dir:j $BASE_DIR"
 echo ""
 
 # Step 1: Build validation set (smaller, faster to test)
