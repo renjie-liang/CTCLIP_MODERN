@@ -272,7 +272,9 @@ def get_existing_samples(output_dir: Path) -> Set[str]:
         try:
             dataset = wds.WebDataset(str(shard_path))
             for sample in dataset:
-                study_id = sample.get('__key__', '')
+                # Read study_id from json metadata (same as DataLoader)
+                metadata = json.loads(sample['json'].decode('utf-8'))
+                study_id = metadata.get('study_id', '')
                 if study_id:
                     if study_id in existing:
                         print(f"   ⚠️  Warning: Duplicate study_id '{study_id}' found in {shard_path.name}")
