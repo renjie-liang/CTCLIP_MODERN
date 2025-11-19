@@ -167,6 +167,8 @@ class CTReportWebDataset:
         """
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=self.shuffle, empty_check=False)
+            .split_by_node()  # Split shards across multiple nodes (for multi-node training)
+            .split_by_worker()  # Split shards across DataLoader workers
             .shuffle(self.buffer_size if self.shuffle else 0)
             .map(self._decode_sample)  # Fast decoding of preprocessed data
             .batched(batch_size)  # Create batches
@@ -201,6 +203,8 @@ class CTReportWebDataset:
 
         dataset = (
             wds.WebDataset(self.shard_pattern, shardshuffle=shard_shuffle, empty_check=False)
+            .split_by_node()  # Split shards across multiple nodes (for multi-node training)
+            .split_by_worker()  # Split shards across DataLoader workers
             .shuffle(self.buffer_size if self.shuffle else 0)
             .map(self._decode_sample)  # Fast decoding of preprocessed data
         )
