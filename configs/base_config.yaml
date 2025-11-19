@@ -84,18 +84,18 @@ training:
   max_grad_norm: 0.5
 
   # Checkpoint saving (epoch-based)
-  save_every_n_epochs: 1.0  # Save every epoch
+  save_every_n_epochs: 0.5  # Save every 0.5 epoch (40 checkpoints for 20 epochs)
   save_every_n_steps: null  # Alternative: specify exact steps
 
   # Learning rate scheduling
-  warmup_epochs: 2.0  # Warmup for 2 epochs
-  warmup_steps: null  # Alternative: specify exact warmup steps
-  min_lr_ratio: 0.01  # Minimum lr as ratio of initial lr
+  warmup_epochs: null  # Alternative: specify epochs
+  warmup_steps: 1000   # Fixed 1000 steps warmup (~0.14 epochs)
+  min_lr_ratio: 0.01   # Minimum lr as ratio of initial lr
 
 # Validation configuration
 validation:
   # Evaluation frequency (epoch-based)
-  eval_every_n_epochs: 1.0  # Evaluate every epoch
+  eval_every_n_epochs: 0.5  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
   eval_every_n_steps: null  # Alternative: specify exact steps
 
   eval_samples: 200  # Validate on 200 samples for speed (null = all samples)
