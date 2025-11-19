@@ -12,7 +12,7 @@ experiment:
 data:
   # WebDataset format paths - PREPROCESSED data (no CPU processing needed)
   # All volumes are already preprocessed: resized, normalized, cropped to (480,480,240)
-  webdataset_shards_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_preprocessed_webdataset/shard-{000000..000368}.tar"
+  webdataset_shards_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_preprocessed_webdataset/shard-{000000..000316}.tar"
   webdataset_shards_val: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_preprocessed_webdataset/shard-{000000..000060}.tar"
   shuffle_buffer_size: 100  # Reduced for debugging
 
