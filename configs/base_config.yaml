@@ -69,22 +69,35 @@ model:
     downsample_image_embeds: false
     use_all_token_embeds: false
 
-# Training configuration (step-based)
+# Training configuration (epoch-based with step-level control)
 training:
-  max_steps: 10000
+  # Primary: Epoch-based training (recommended for consistency across batch sizes)
+  max_epochs: 20  # Train for 20 epochs
+  max_steps: null  # If set, overrides max_epochs
+
+  # Steps will be auto-calculated as: max_epochs × (num_samples ÷ batch_size)
+  # Example: 20 epochs × (~29500 samples ÷ 4 batch_size) ≈ 147,500 steps
+
   learning_rate: 1.25e-6
   weight_decay: 0.01
   gradient_accumulation_steps: 1
   max_grad_norm: 0.5
-  save_every_n_steps: 1000
+
+  # Checkpoint saving (epoch-based)
+  save_every_n_epochs: 1.0  # Save every epoch
+  save_every_n_steps: null  # Alternative: specify exact steps
 
   # Learning rate scheduling
-  warmup_steps: 1000
+  warmup_epochs: 2.0  # Warmup for 2 epochs
+  warmup_steps: null  # Alternative: specify exact warmup steps
   min_lr_ratio: 0.01  # Minimum lr as ratio of initial lr
 
 # Validation configuration
 validation:
-  eval_every_n_steps: 1000
+  # Evaluation frequency (epoch-based)
+  eval_every_n_epochs: 1.0  # Evaluate every epoch
+  eval_every_n_steps: null  # Alternative: specify exact steps
+
   eval_samples: 200  # Validate on 200 samples for speed (null = all samples)
   metrics: ["auroc", "auprc", "f1", "precision", "recall"]
   use_bootstrap: false  # False for training, True for inference
