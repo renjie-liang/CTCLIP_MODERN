@@ -132,7 +132,14 @@ class CTReportWebDataset:
             report_text = self._clean_text(report_text)
 
             # Load labels (copy to avoid read-only warning)
-            labels = np.frombuffer(sample['labels'], dtype=np.float32).copy()
+            # Handle missing labels gracefully (some samples may not have labels)
+            if 'labels' in sample:
+                labels = np.frombuffer(sample['labels'], dtype=np.float32).copy()
+            elif 'cls' in sample:  # Alternative key name
+                labels = np.frombuffer(sample['cls'], dtype=np.float32).copy()
+            else:
+                # If no labels found, create empty array (will be filled from CSV later)
+                labels = np.array([], dtype=np.float32)
 
             # No embedding in standard mode
             embed_tensor = torch.empty(0, dtype=volume_tensor.dtype)
