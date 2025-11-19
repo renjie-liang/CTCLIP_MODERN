@@ -68,22 +68,18 @@ class CTClipTrainer(nn.Module):
         validation_cfg = config['validation']
         checkpoint_cfg = config['checkpoint']
 
-        # Training parameters (step-based)
-        self.max_steps = training_cfg['max_steps']
+        # Basic training parameters
         self.batch_size = data_cfg['batch_size']
         self.lr = training_cfg['learning_rate']
         self.wd = training_cfg['weight_decay']
         self.max_grad_norm = training_cfg['max_grad_norm']
         self.gradient_accumulation_steps = training_cfg['gradient_accumulation_steps']
-
-        # Warmup
-        self.warmup_steps = training_cfg.get('warmup_steps', 0)
         self.min_lr_ratio = training_cfg.get('min_lr_ratio', 0.01)
 
-        # Validation & Saving
-        self.eval_every_n_steps = validation_cfg['eval_every_n_steps']
-        self.eval_samples = validation_cfg.get('eval_samples', None)  # None = all samples
-        self.save_every_n_steps = training_cfg['save_every_n_steps']
+        # Store configs for later use (after dataset is loaded)
+        self._training_cfg = training_cfg
+        self._validation_cfg = validation_cfg
+
         self.results_folder = Path(checkpoint_cfg['save_dir'])
         self.results_folder.mkdir(parents=True, exist_ok=True)
 
@@ -159,6 +155,54 @@ class CTClipTrainer(nn.Module):
             prefetch_factor=data_cfg.get('prefetch_factor', 2)
         )
 
+        # Calculate steps per epoch FIRST (needed for epoch-based configs)
+        # WebDataset doesn't have len(), so calculate from num_samples
+        if self.train_dataset.num_samples is not None:
+            self.steps_per_epoch = (self.train_dataset.num_samples // self.batch_size) // self.gradient_accumulation_steps
+        else:
+            # Fallback: estimate based on typical dataset size
+            self.steps_per_epoch = 1000
+            self.print("Warning: Could not determine dataset size, using estimated steps_per_epoch=1000")
+
+        # Calculate training duration (prioritize max_steps over max_epochs)
+        training_cfg = self._training_cfg
+        validation_cfg = self._validation_cfg
+
+        if training_cfg.get('max_steps') is not None:
+            # Step-based training
+            self.max_steps = training_cfg['max_steps']
+            self.max_epochs_config = self.max_steps / self.steps_per_epoch
+            self.print(f"Using step-based training: {self.max_steps} steps (~{self.max_epochs_config:.2f} epochs)")
+        else:
+            # Epoch-based training
+            self.max_epochs_config = training_cfg['max_epochs']
+            self.max_steps = int(self.max_epochs_config * self.steps_per_epoch)
+            self.print(f"Using epoch-based training: {self.max_epochs_config} epochs = {self.max_steps} steps")
+            self.print(f"  Dataset: {self.train_dataset.num_samples} samples / batch_size {self.batch_size} = {self.steps_per_epoch} steps/epoch")
+
+        # Calculate warmup steps (prioritize warmup_steps over warmup_epochs)
+        if training_cfg.get('warmup_steps') is not None:
+            self.warmup_steps = training_cfg['warmup_steps']
+        else:
+            warmup_epochs = training_cfg.get('warmup_epochs', 0)
+            self.warmup_steps = int(warmup_epochs * self.steps_per_epoch)
+
+        # Calculate evaluation frequency (prioritize steps over epochs)
+        if validation_cfg.get('eval_every_n_steps') is not None:
+            self.eval_every_n_steps = validation_cfg['eval_every_n_steps']
+        else:
+            eval_every_n_epochs = validation_cfg.get('eval_every_n_epochs', 1.0)
+            self.eval_every_n_steps = int(eval_every_n_epochs * self.steps_per_epoch)
+
+        self.eval_samples = validation_cfg.get('eval_samples', None)  # None = all samples
+
+        # Calculate checkpoint saving frequency (prioritize steps over epochs)
+        if training_cfg.get('save_every_n_steps') is not None:
+            self.save_every_n_steps = training_cfg['save_every_n_steps']
+        else:
+            save_every_n_epochs = training_cfg.get('save_every_n_epochs', 1.0)
+            self.save_every_n_steps = int(save_every_n_epochs * self.steps_per_epoch)
+
         # Device
         self.device = self.accelerator.device
         self.model.to(self.device)
@@ -179,15 +223,6 @@ class CTClipTrainer(nn.Module):
         self.model, self.optim, self.scheduler = self.accelerator.prepare(
             self.model, self.optim, self.scheduler
         )
-
-        # Calculate steps per epoch
-        # WebDataset doesn't have len(), so calculate from num_samples
-        if self.train_dataset.num_samples is not None:
-            self.steps_per_epoch = (self.train_dataset.num_samples // self.batch_size) // self.gradient_accumulation_steps
-        else:
-            # Fallback: estimate based on typical dataset size
-            self.steps_per_epoch = 1000
-            self.print("Warning: Could not determine dataset size, using estimated steps_per_epoch=1000")
 
         # Initialize components
         self.print("\n" + "="*80)
@@ -226,9 +261,13 @@ class CTClipTrainer(nn.Module):
         self.print(f"Trainer initialized:")
         self.print(f"  Train samples: {len(self.train_dataset)}")
         self.print(f"  Val samples: {len(self.val_dataset)}")
-        self.print(f"  Max steps: {self.max_steps}")
+        self.print(f"  Batch size: {self.batch_size}")
         self.print(f"  Steps per epoch: {self.steps_per_epoch}")
-        self.print(f"  Warmup steps: {self.warmup_steps}")
+        self.print(f"")
+        self.print(f"  Training duration: {self.max_epochs_config:.2f} epochs = {self.max_steps} steps")
+        self.print(f"  Warmup: {self.warmup_steps} steps ({self.warmup_steps/self.steps_per_epoch:.2f} epochs)")
+        self.print(f"  Eval every: {self.eval_every_n_steps} steps ({self.eval_every_n_steps/self.steps_per_epoch:.2f} epochs)")
+        self.print(f"  Save every: {self.save_every_n_steps} steps ({self.save_every_n_steps/self.steps_per_epoch:.2f} epochs)")
         if self.eval_samples:
             self.print(f"  Eval samples: {self.eval_samples} (partial validation)")
 
