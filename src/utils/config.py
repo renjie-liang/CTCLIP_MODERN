@@ -109,24 +109,38 @@ def validate_config(config: Dict) -> None:
     if 'name' not in exp:
         raise ValueError("experiment.name is required")
 
-    # Validate training (step-based)
+    # Validate training (support both step-based and epoch-based)
     training = config['training']
-    if 'max_steps' not in training:
-        raise ValueError("training.max_steps is required")
     if 'learning_rate' not in training:
         raise ValueError("training.learning_rate is required")
 
     if training['learning_rate'] <= 0:
         raise ValueError(f"learning_rate must be positive")
-    if training['max_steps'] <= 0:
-        raise ValueError(f"max_steps must be positive")
 
-    # Validate validation
+    # Either max_steps or max_epochs must be set
+    max_steps = training.get('max_steps')
+    max_epochs = training.get('max_epochs')
+
+    if max_steps is None and max_epochs is None:
+        raise ValueError("Either training.max_steps or training.max_epochs must be set")
+
+    if max_steps is not None and max_steps <= 0:
+        raise ValueError(f"max_steps must be positive (got {max_steps})")
+
+    if max_epochs is not None and max_epochs <= 0:
+        raise ValueError(f"max_epochs must be positive (got {max_epochs})")
+
+    # Validate validation (support both step-based and epoch-based)
     validation = config['validation']
     if 'metrics' not in validation:
         raise ValueError("validation.metrics is required")
-    if 'eval_every_n_steps' not in validation:
-        raise ValueError("validation.eval_every_n_steps is required")
+
+    # Either eval_every_n_steps or eval_every_n_epochs must be set
+    eval_steps = validation.get('eval_every_n_steps')
+    eval_epochs = validation.get('eval_every_n_epochs')
+
+    if eval_steps is None and eval_epochs is None:
+        raise ValueError("Either validation.eval_every_n_steps or validation.eval_every_n_epochs must be set")
 
     # Validate checkpoint
     checkpoint = config['checkpoint']
