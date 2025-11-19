@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=ctclip_train_multi_gpu
 #SBATCH --partition=hpg-b200
-#SBATCH --gres=gpu:4              # 使用4个GPU (可以改成2/8等)
+#SBATCH --gres=gpu:2              # 使用4个GPU (可以改成2/8等)
 #SBATCH --nodes=1                 # 单节点
 #SBATCH --cpus-per-task=32        # 建议增加CPU以匹配GPU数量
 #SBATCH --mem=400gb               # 建议增加内存以匹配GPU数量
@@ -35,8 +35,8 @@ echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURM_NODELIST"
 echo "Partition: $SLURM_JOB_PARTITION"
 echo "CPUs per task: $SLURM_CPUS_PER_TASK"
-echo "Memory: 400GB"
-echo "GPUs: 4 (CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES)"
+echo "Memory: 200GB"
+echo "GPUs: 2 (CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES)"
 echo "========================================"
 echo "Environment"
 echo "========================================"
@@ -46,20 +46,7 @@ echo "Python version: $(python --version)"
 echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
 echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 echo "Number of GPUs: $(python -c 'import torch; print(torch.cuda.device_count())')"
-echo "========================================"
-echo "Training Configuration"
-echo "========================================"
-echo "Config file: configs/base_config.yaml"
-echo "Accelerate config: training/configs/accelerate_single_node.yaml"
-echo "Data format: WebDataset (float16)"
-echo "Mixed precision: Enabled (fp16)"
-echo "Batch size per GPU: 8"
-echo "Number of GPUs: 4"
-echo "Effective batch size: 32 (8 x 4)"
-echo "Num workers: 24"
-echo "Max steps: 100000"
-echo "========================================"
-echo ""
+
 
 # Start training with accelerate
 echo "Starting multi-GPU training at $(date)"
