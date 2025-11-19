@@ -6,7 +6,7 @@
 
 # 使用accelerate启动训练
 accelerate launch \
-    --config_file accelerate_config_single_node.yaml \
+    --config_file training/configs/accelerate_single_node.yaml \
     train.py \
     --config configs/base_config.yaml
 
