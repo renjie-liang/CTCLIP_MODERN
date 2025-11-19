@@ -31,7 +31,7 @@ echo "Master node: $MASTER_ADDR:$MASTER_PORT"
 
 # 使用srun + accelerate launch启动多节点训练
 srun accelerate launch \
-    --config_file accelerate_config_multi_node.yaml \
+    --config_file training/configs/accelerate_multi_node.yaml \
     --num_processes=$((SLURM_NNODES * SLURM_GPUS_PER_NODE)) \
     --num_machines=$SLURM_NNODES \
     --machine_rank=$SLURM_PROCID \
