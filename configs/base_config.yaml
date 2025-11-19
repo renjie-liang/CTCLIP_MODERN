@@ -20,10 +20,6 @@ data:
   webdataset_shards_val: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_preprocessed_webdataset/shard-{000000..000060}.tar"
   shuffle_buffer_size: 1000  # Buffer size for shuffling in WebDataset mode
 
-  # Legacy NPZ paths (DEPRECATED - data deleted, use WebDataset instead)
-  # train_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed_npz"
-  # valid_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed_npz"
-
   reports_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/train_reports.csv"
   reports_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/validation_reports.csv"
 
@@ -34,9 +30,9 @@ data:
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
   # DataLoader配置
-  batch_size: 8
-  num_workers: 12  # Reduced from 24 since no CPU preprocessing needed
-  prefetch_factor: 2  # Number of batches to prefetch per worker
+  batch_size: 4
+  num_workers: 8  # Reduced from 24 since no CPU preprocessing needed
+  prefetch_factor: 1  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
@@ -55,7 +51,7 @@ model:
     temporal_depth: 4
     dim_head: 32
     heads: 8
-    profile_timing: true  # Enable detailed CTViT profiling (print timing for each component)
+    profile_timing: false  # Enable detailed CTViT profiling (print timing for each component)
 
   # Text Encoder (BiomedBERT)
   text_encoder:

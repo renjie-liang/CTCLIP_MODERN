@@ -47,7 +47,7 @@ model:
     temporal_depth: 4
     dim_head: 32
     heads: 8
-    profile_timing: true  # Enable detailed CTViT profiling (print timing for each component)
+    profile_timing: false  # Enable detailed CTViT profiling (print timing for each component)
 
   # Text Encoder (BiomedBERT)
   text_encoder:
@@ -110,7 +110,7 @@ logging:
   tensorboard:
     log_dir: "./runs_debug"
 
-  log_every_n_steps: 1    # Log every step
+  log_every_n_steps: 5    # Log every step
   profile_timing: true  # Print detailed timing breakdown (data loading, forward, backward, optimizer)
 
 # Device configuration
