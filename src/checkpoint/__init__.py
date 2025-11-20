@@ -1,5 +1,5 @@
 """
-Checkpoint管理模块
+Checkpoint management module
 """
 
 from .checkpoint_manager import CheckpointManager

@@ -3,13 +3,13 @@ debug: false
 distributed_type: MULTI_GPU
 downcast_bf16: 'no'
 gpu_ids: all
-machine_rank: 0  # 会被环境变量覆盖
-main_process_ip: null  # 会被环境变量覆盖
+machine_rank: 0  # will be overridden by environment variables
+main_process_ip: null  # will be overridden by environment variables
 main_process_port: 29500
 main_training_function: main
 mixed_precision: fp16
-num_machines: 2  # 2个节点
-num_processes: 8  # 总共8个GPU (假设每个节点4个GPU)
+num_machines: 2  # 2 nodes
+num_processes: 8  # total of 8 GPUs (assuming 4 GPUs per node)
 rdzv_backend: static
 same_network: true
 tpu_env: []

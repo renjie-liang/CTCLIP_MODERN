@@ -1,7 +1,7 @@
 """
-控制台日志记录器
+Console logger
 
-简单的打印到stdout
+Simple printing to stdout
 """
 
 from typing import Dict, Any, Optional
@@ -12,20 +12,20 @@ from .base_logger import BaseLogger
 
 class ConsoleLogger(BaseLogger):
     """
-    控制台日志记录器
+    Console logger
 
-    简单地打印指标到标准输出
+    Simply prints metrics to standard output
     """
 
     def __init__(self, print_timestamp: bool = True):
         """
         Args:
-            print_timestamp: 是否打印时间戳
+            print_timestamp: Whether to print timestamp
         """
         self.print_timestamp = print_timestamp
 
     def _format_timestamp(self) -> str:
-        """生成时间戳前缀"""
+        """Generate timestamp prefix"""
         if self.print_timestamp:
             return f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
         return ""
@@ -37,26 +37,26 @@ class ConsoleLogger(BaseLogger):
         prefix: str = ""
     ) -> None:
         """
-        打印指标
+        Print metrics
 
         Args:
-            metrics: 指标字典
-            step: 步数
-            prefix: 前缀
+            metrics: Metrics dictionary
+            step: Step number
+            prefix: Prefix
         """
         timestamp = self._format_timestamp()
 
-        # 构建步数信息
+        # Build step info
         step_info = f"Step {step}" if step is not None else ""
 
-        # 构建前缀
+        # Build prefix
         prefix_info = f"{prefix}" if prefix else ""
 
-        # 组合header
+        # Combine header
         header_parts = [p for p in [step_info, prefix_info] if p]
         header = " - ".join(header_parts)
 
-        # 格式化指标
+        # Format metrics
         metrics_parts = []
         for k, v in metrics.items():
             if isinstance(v, dict):
@@ -71,7 +71,7 @@ class ConsoleLogger(BaseLogger):
 
         metrics_str = ", ".join(metrics_parts)
 
-        # 打印
+        # Print
         if header:
             print(f"{timestamp}{header} | {metrics_str}")
         else:
@@ -79,17 +79,17 @@ class ConsoleLogger(BaseLogger):
 
     def log_hyperparameters(self, config: Dict[str, Any]) -> None:
         """
-        打印配置
+        Print configuration
 
         Args:
-            config: 配置字典
+            config: Configuration dictionary
         """
         timestamp = self._format_timestamp()
         print(f"{timestamp}Hyperparameters:")
         self._print_dict(config, indent=2)
 
     def _print_dict(self, d: Dict, indent: int = 0):
-        """递归打印字典"""
+        """Recursively print dictionary"""
         for key, value in d.items():
             if isinstance(value, dict):
                 print("  " * indent + f"{key}:")
@@ -99,12 +99,12 @@ class ConsoleLogger(BaseLogger):
 
     def log_text(self, key: str, text: str, step: Optional[int] = None) -> None:
         """
-        打印文本
+        Print text
 
         Args:
-            key: 文本键
-            text: 文本内容
-            step: 步数
+            key: Text key
+            text: Text content
+            step: Step number
         """
         timestamp = self._format_timestamp()
         step_info = f"Step {step} - " if step is not None else ""
@@ -112,5 +112,5 @@ class ConsoleLogger(BaseLogger):
         print(text)
 
     def finish(self) -> None:
-        """结束日志（console logger不需要做anything）"""
+        """Finish logging (console logger doesn't need to do anything)"""
         pass

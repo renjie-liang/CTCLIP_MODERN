@@ -1,14 +1,14 @@
 # CT-CLIP Training - Base Configuration
-# 所有实验的基础配置模板
+# Base configuration template for all experiments
 
-# 实验信息
+# Experiment information
 experiment:
   name: "ct-clip-baseline"
   tags: ["baseline", "ctclip"]
   seed: 2025
   notes: "Step-based training configuration"
 
-# 数据配置
+# Data configuration
 data:
   # WebDataset format paths - PREPROCESSED data (no CPU processing needed)
   # All volumes are already:
@@ -29,7 +29,7 @@ data:
   labels_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv"
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
-  # DataLoader配置
+  # DataLoader configuration
   batch_size: 4
   num_workers: 2  
   prefetch_factor: 1  # Number of batches to prefetch per worker
@@ -37,7 +37,7 @@ data:
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
 
-# 模型配置
+# Model configuration
 model:
   # Image Encoder (CTViT)
   image_encoder:
@@ -59,7 +59,7 @@ model:
     path: "/orange/xujie/liang.renjie/DATA/weights/BiomedVLP-CXR-BERT-specialized"
     do_lower_case: true
 
-  # CLIP配置
+  # CLIP configuration
   clip:
     dim_image: 294912
     dim_text: 768

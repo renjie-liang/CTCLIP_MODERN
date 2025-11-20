@@ -7,7 +7,7 @@ machine_rank: 0
 main_training_function: main
 mixed_precision: fp16
 num_machines: 1
-num_processes: 2  # 使用2个GPU，改成4就是4个GPU
+num_processes: 2  # Use 2 GPUs, change to 4 for 4 GPUs
 rdzv_backend: static
 same_network: true
 tpu_env: []

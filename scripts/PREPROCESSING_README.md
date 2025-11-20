@@ -1,35 +1,35 @@
-# CT-RATE 数据预处理指南
+# CT-RATE Data Preprocessing Guide
 
-本指南介绍如何从 Hugging Face 直接构建预处理后的 WebDataset，以实现 **10x 训练加速**。
+This guide explains how to build preprocessed WebDataset directly from Hugging Face to achieve **10x training acceleration**.
 
-## 🎯 目标
+## 🎯 Goals
 
-- 将 CPU 密集型预处理（resize, normalize 等）提前完成
-- 训练时只需快速读取预处理好的数据
-- 数据加载从 ~4500ms 降至 ~50-100ms
-- GPU 利用率从 2.2% 提升至 70-80%
+- Complete CPU-intensive preprocessing (resize, normalize, etc.) ahead of time
+- Only need to quickly load preprocessed data during training
+- Reduce data loading from ~4500ms to ~50-100ms
+- Increase GPU utilization from 2.2% to 70-80%
 
-## 📋 前置条件
+## 📋 Prerequisites
 
 ```bash
 pip install huggingface-hub webdataset torch numpy
 ```
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 方案一：使用示例脚本（推荐新手）
+### Solution 1: Using Example Script (Recommended for Beginners)
 
 ```bash
-# 编辑脚本中的路径
+# Edit paths in the script
 vim scripts/build_dataset_example.sh
 
-# 运行
+# Run
 bash scripts/build_dataset_example.sh
 ```
 
-### 方案二：手动运行（推荐进阶用户）
+### Solution 2: Manual Execution (Recommended for Advanced Users)
 
-#### 1️⃣ 先处理验证集（测试流程）
+#### 1️⃣ Process Validation Set First (Test Workflow)
 
 ```bash
 python scripts/build_preprocessed_dataset.py \
@@ -39,7 +39,7 @@ python scripts/build_preprocessed_dataset.py \
     --num-workers 8
 ```
 
-**预期输出**：
+**Expected Output**:
 ```
 📋 Listing files from ibrahimhamamci/CT-RATE (split=valid)...
    Found 7686 valid files
@@ -53,7 +53,7 @@ Processing shards: 100%|████████| 60/60 [15:30<00:00, 15.5s/shar
    Total shards: 60
 ```
 
-#### 2️⃣ 处理训练集
+#### 2️⃣ Process Training Set
 
 ```bash
 python scripts/build_preprocessed_dataset.py \
@@ -63,7 +63,7 @@ python scripts/build_preprocessed_dataset.py \
     --num-workers 16
 ```
 
-**预期输出**：
+**Expected Output**:
 ```
 📋 Listing files from ibrahimhamamci/CT-RATE (split=train)...
    Found 40279 train files
@@ -74,9 +74,9 @@ python scripts/build_preprocessed_dataset.py \
 Processing shards: 100%|████████| 315/315 [82:15<00:00, 15.7s/shard]
 ```
 
-## 📊 Manifest 文件
+## 📊 Manifest File
 
-每个数据集都会生成 `manifest.json`，记录数据集信息：
+Each dataset will generate a `manifest.json` that records dataset information:
 
 ```json
 {
@@ -101,54 +101,54 @@ Processing shards: 100%|████████| 315/315 [82:15<00:00, 15.7s/sh
 }
 ```
 
-## 🔧 高级选项
+## 🔧 Advanced Options
 
-### 增量处理（续传）
+### Incremental Processing (Resume)
 
-脚本会自动检测已存在的 shards，只处理缺失的部分：
+The script automatically detects existing shards and only processes missing ones:
 
 ```bash
-# 如果中断，直接重新运行即可续传
+# If interrupted, simply re-run to resume
 python scripts/build_preprocessed_dataset.py \
     --split train \
     --output-dir /path/to/output \
     --num-workers 16
 ```
 
-### 强制重新处理
+### Force Reprocessing
 
 ```bash
 python scripts/build_preprocessed_dataset.py \
     --split train \
     --output-dir /path/to/output \
-    --force  # 重新处理所有 shards
+    --force  # Reprocess all shards
 ```
 
-### 自定义 shard 大小
+### Customize Shard Size
 
 ```bash
-# 每个 shard 包含 256 个样本（更大的文件，更少的 shards）
+# Each shard contains 256 samples (larger files, fewer shards)
 python scripts/build_preprocessed_dataset.py \
     --split train \
     --output-dir /path/to/output \
     --samples-per-shard 256
 ```
 
-### 调整并行度
+### Adjust Parallelism
 
 ```bash
-# 根据 CPU 核心数调整
+# Adjust based on CPU core count
 python scripts/build_preprocessed_dataset.py \
     --split train \
     --output-dir /path/to/output \
-    --num-workers 32  # 更多并行下载和处理
+    --num-workers 32  # More parallel downloading and processing
 ```
 
-## 📁 输出目录结构
+## 📁 Output Directory Structure
 
 ```
 valid_preprocessed_webdataset/
-├── manifest.json           # 数据集元信息
+├── manifest.json           # Dataset metadata
 ├── shard-000000.tar        # Shard 0 (128 samples)
 ├── shard-000001.tar        # Shard 1 (128 samples)
 ├── ...
@@ -159,41 +159,41 @@ train_preprocessed_webdataset/
 ├── shard-000000.tar
 ├── shard-000001.tar
 ├── ...
-└── shard-000314.tar        # Shard 314 (最后一个可能不满 128)
+└── shard-000314.tar        # Shard 314 (last one may have less than 128)
 ```
 
-每个 tar 文件内部结构（WebDataset 格式）：
+Internal structure of each tar file (WebDataset format):
 ```
 shard-000000.tar
-├── sample_001.bin          # 预处理后的 volume (480x480x240 float16)
-├── sample_001.txt          # 报告文本
-├── sample_001.cls          # 疾病标签 (18 classes)
-├── sample_001.json         # 元数据
+├── sample_001.bin          # Preprocessed volume (480x480x240 float16)
+├── sample_001.txt          # Report text
+├── sample_001.cls          # Disease labels (18 classes)
+├── sample_001.json         # Metadata
 ├── sample_002.bin
 ├── sample_002.txt
 ├── ...
 ```
 
-## 🔄 更新训练配置
+## 🔄 Update Training Config
 
-处理完成后，更新你的配置文件：
+After processing is complete, update your config file:
 
 ```yaml
 data:
-  # 使用预处理后的数据集
+  # Use preprocessed dataset
   train_shard_pattern: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_preprocessed_webdataset/shard-{000000..000314}.tar"
   valid_shard_pattern: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_preprocessed_webdataset/shard-{000000..000059}.tar"
 
-  # 启用快速加载模式
+  # Enable fast loading mode
   preprocessed: true
 
-  # 可以减少 num_workers（预处理已完成，不需要那么多 CPU）
-  num_workers: 8  # 从 24 降至 8
+  # Can reduce num_workers (preprocessing complete, don't need as many CPUs)
+  num_workers: 8  # Reduce from 24 to 8
 ```
 
-## ✅ 验证数据正确性
+## ✅ Verify Data Correctness
 
-如果你之前有 `train_fixed_webdataset` 数据，可以验证预处理是否正确：
+If you previously had `train_fixed_webdataset` data, you can verify preprocessing correctness:
 
 ```bash
 python scripts/verify_preprocessed_data.py \
@@ -202,132 +202,132 @@ python scripts/verify_preprocessed_data.py \
     --num-samples 10
 ```
 
-**预期输出**：
+**Expected Output**:
 ```
 ✅ All samples passed verification!
 ```
 
-## 💾 存储空间估算
+## 💾 Storage Space Estimation
 
-- **原始数据** (npz, 变长)：约 14TB
-- **预处理数据** (固定大小)：约 4TB
-  - 每个样本：480 × 480 × 240 × 2 bytes = 110 MB
-  - 40,279 训练样本：约 4.3 TB
-  - 7,686 验证样本：约 822 GB
+- **Original data** (npz, variable length): ~14TB
+- **Preprocessed data** (fixed size): ~4TB
+  - Per sample: 480 × 480 × 240 × 2 bytes = 110 MB
+  - 40,279 training samples: ~4.3 TB
+  - 7,686 validation samples: ~822 GB
 
-## ⏱️ 处理时间估算
+## ⏱️ Processing Time Estimation
 
-基于 num_workers=16：
+Based on num_workers=16:
 
-- **验证集**（7,686 samples）：约 15-20 分钟
-- **训练集**（40,279 samples）：约 80-120 分钟
+- **Validation set** (7,686 samples): ~15-20 minutes
+- **Training set** (40,279 samples): ~80-120 minutes
 
-实际时间取决于：
-- 网络速度（下载 HF 数据）
-- CPU 核心数（并行处理）
-- 磁盘 I/O 速度
+Actual time depends on:
+- Network speed (downloading HF data)
+- CPU core count (parallel processing)
+- Disk I/O speed
 
-## 🐛 故障排除
+## 🐛 Troubleshooting
 
-### 问题 1：下载失败
+### Issue 1: Download Failed
 
 ```bash
 ❌ Failed to download dataset/train_fixed/sample_001.npz: Connection timeout
 ```
 
-**解决方案**：重新运行脚本，它会自动续传，只处理缺失的 shards。
+**Solution**: Re-run the script, it will automatically resume and only process missing shards.
 
-### 问题 2：内存不足
+### Issue 2: Out of Memory
 
 ```bash
 MemoryError: Unable to allocate array
 ```
 
-**解决方案**：减少 `--num-workers`：
+**Solution**: Reduce `--num-workers`:
 
 ```bash
 python scripts/build_preprocessed_dataset.py \
     --split train \
     --output-dir /path/to/output \
-    --num-workers 4  # 降低并行度
+    --num-workers 4  # Lower parallelism
 ```
 
-### 问题 3：磁盘空间不足
+### Issue 3: Insufficient Disk Space
 
-**解决方案**：
-1. 先处理一部分数据
-2. 脚本会自动清理临时下载的文件
-3. 确保至少有 5TB 可用空间
+**Solution**:
+1. Process data in parts first
+2. Script automatically cleans up temporary downloaded files
+3. Ensure at least 5TB available space
 
-### 问题 4：HuggingFace 认证
+### Issue 4: HuggingFace Authentication
 
-如果数据集需要认证：
+If dataset requires authentication:
 
 ```bash
-# 设置 HF token
+# Set HF token
 export HF_TOKEN="your_token_here"
 
-# 或者使用 huggingface-cli
+# Or use huggingface-cli
 huggingface-cli login
 ```
 
-## 📈 性能提升
+## 📈 Performance Improvement
 
-使用预处理数据后的预期提升：
+Expected improvements after using preprocessed data:
 
-| 指标 | 之前 | 之后 | 提升 |
+| Metric | Before | After | Improvement |
 |------|------|------|------|
-| 数据加载时间 | ~4500ms | ~50-100ms | **45-90x** |
-| GPU 利用率 | 2.2% | 70-80% | **32-36x** |
-| 整体训练速度 | 4.8s/step | ~0.5s/step | **~10x** |
-| CPU 核心需求 | 60 threads | 16 threads | **节省 73%** |
+| Data loading time | ~4500ms | ~50-100ms | **45-90x** |
+| GPU utilization | 2.2% | 70-80% | **32-36x** |
+| Overall training speed | 4.8s/step | ~0.5s/step | **~10x** |
+| CPU core requirement | 60 threads | 16 threads | **Save 73%** |
 
-## 🔍 工作原理
+## 🔍 How It Works
 
-### 原始流程（慢）
+### Original Workflow (Slow)
 ```
-训练循环每一步：
-1. 从 tar 读取 npz (100ms)
-2. 解压 npz (50ms)
+Training loop each step:
+1. Read npz from tar (100ms)
+2. Decompress npz (50ms)
 3. Rescale (250ms)
 4. Clip (127ms)
 5. Resize (262ms)
 6. Normalize (135ms)
 7. Crop/Pad (50ms)
-8. GPU 操作 (379ms)
+8. GPU operations (379ms)
 ────────────────────────
-总计：~1350ms/step
+Total: ~1350ms/step
 ```
 
-### 预处理流程（快）
+### Preprocessing Workflow (Fast)
 ```
-一次性预处理：
-1-7. 所有预处理操作 → 保存为 WebDataset
+One-time preprocessing:
+1-7. All preprocessing operations → Save as WebDataset
 
-训练循环每一步：
-1. 从 tar 读取已处理数据 (30ms)
+Training loop each step:
+1. Read preprocessed data from tar (30ms)
 2. Permute + Unsqueeze (0.02ms)
-3. GPU 操作 (379ms)
+3. GPU operations (379ms)
 ────────────────────────
-总计：~410ms/step
+Total: ~410ms/step
 ```
 
-## 📚 相关脚本
+## 📚 Related Scripts
 
-- `build_preprocessed_dataset.py` - 主脚本（从 HF 构建预处理数据集）
-- `preprocess_webdataset.py` - 转换已有的 WebDataset
-- `verify_preprocessed_data.py` - 验证预处理正确性
-- `inspect_webdataset.py` - 检查 WebDataset 内容
+- `build_preprocessed_dataset.py` - Main script (build preprocessed dataset from HF)
+- `preprocess_webdataset.py` - Convert existing WebDataset
+- `verify_preprocessed_data.py` - Verify preprocessing correctness
+- `inspect_webdataset.py` - Inspect WebDataset contents
 
-## 💡 提示
+## 💡 Tips
 
-1. **先测试小数据集**：先处理验证集（更小），确认流程正确
-2. **使用 tmux/screen**：处理训练集需要 1-2 小时，使用持久会话
-3. **监控进度**：脚本会显示进度条和成功/失败统计
-4. **保留 manifest**：`manifest.json` 包含重要的数据集信息
-5. **增量处理**：中断后重新运行会自动续传
+1. **Test with small dataset first**: Process validation set (smaller) first to confirm workflow is correct
+2. **Use tmux/screen**: Processing training set takes 1-2 hours, use persistent session
+3. **Monitor progress**: Script shows progress bar and success/failure statistics
+4. **Keep manifest**: `manifest.json` contains important dataset information
+5. **Incremental processing**: Re-running after interruption will automatically resume
 
-## 📞 获取帮助
+## 📞 Get Help
 
 ```bash
 python scripts/build_preprocessed_dataset.py --help

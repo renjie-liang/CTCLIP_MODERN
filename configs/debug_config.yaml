@@ -1,14 +1,14 @@
 # CT-CLIP Debug Configuration
 # Use this for debugging DataLoader issues
 
-# 实验信息
+# Experiment information
 experiment:
   name: "ct-clip-debug"
   tags: ["debug"]
   seed: 2025
   notes: "Debug configuration with minimal workers"
 
-# 数据配置
+# Data configuration
 data:
   # WebDataset format paths - PREPROCESSED data (no CPU processing needed)
   # All volumes are already preprocessed: resized, normalized, cropped to (480,480,240)
@@ -25,7 +25,7 @@ data:
   labels_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv"
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
-  # DataLoader配置 - OPTIMIZED FOR DEBUGGING
+  # DataLoader configuration - OPTIMIZED FOR DEBUGGING
   batch_size: 4           # Small batch for debugging
   num_workers: 0          # Single process - easier to debug
   prefetch_factor: 2      # Ignored when num_workers=0
@@ -33,7 +33,7 @@ data:
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
 
-# 模型配置
+# Model configuration
 model:
   # Image Encoder (CTViT)
   image_encoder:
@@ -55,7 +55,7 @@ model:
     path: "/orange/xujie/liang.renjie/DATA/weights/BiomedVLP-CXR-BERT-specialized"
     do_lower_case: true
 
-  # CLIP配置
+  # CLIP configuration
   clip:
     dim_image: 294912
     dim_text: 768

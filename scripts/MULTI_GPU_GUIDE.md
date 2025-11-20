@@ -1,120 +1,120 @@
 # Multi-GPU Training Guide
 
-## 📊 重要：Iteration数量变化
+## 📊 Important: Changes in Iteration Count
 
-使用多GPU会减少每个epoch的iterations，但**总数据量保持不变**：
+Using multiple GPUs reduces iterations per epoch, but **total data volume remains unchanged**:
 
-| 配置 | Batch Size (per GPU) | Total Batch | Steps/Epoch |
+| Configuration | Batch Size (per GPU) | Total Batch | Steps/Epoch |
 |------|---------------------|-------------|-------------|
 | 1 GPU | 4 | 4 | 7,375 |
 | 2 GPUs | 4 | 8 | 3,687 (50%) |
 | 4 GPUs | 4 | 16 | 1,843 (25%) |
 | 8 GPUs | 4 | 32 | 921 (12.5%) |
 
-**说明：**
-- Steps减少是因为每步处理更多数据
-- 每个epoch仍然遍历所有29,500个样本
-- 训练时间会减少（并行加速）
+**Explanation:**
+- Steps decrease because each step processes more data
+- Each epoch still traverses all 29,500 samples
+- Training time will decrease (parallel acceleration)
 
 ---
 
-## 方案1️⃣: 单节点多GPU（最简单）
+## Solution 1️⃣: Single-Node Multi-GPU (Easiest)
 
-### 使用场景
-- 一台机器上有多个GPU
-- 最简单的并行方案
-- 推荐先测试这个
+### Use Cases
+- Multiple GPUs on a single machine
+- Simplest parallel solution
+- Recommended to test this first
 
-### 步骤
+### Steps
 
-**1. 修改配置文件 `accelerate_config_single_node.yaml`**
+**1. Modify the config file `accelerate_config_single_node.yaml`**
 
 ```yaml
-num_processes: 2  # 改成你想用的GPU数量 (2, 4, 8等)
+num_processes: 2  # Change to the number of GPUs you want to use (2, 4, 8, etc.)
 ```
 
-**2. 启动训练**
+**2. Start Training**
 
 ```bash
-# 方式A: 使用脚本
+# Method A: Using script
 bash scripts/train_multi_gpu.sh
 
-# 方式B: 直接命令
+# Method B: Direct command
 accelerate launch \
     --config_file accelerate_config_single_node.yaml \
     train.py \
     --config configs/base_config.yaml
 ```
 
-**3. 指定特定GPU（可选）**
+**3. Specify Specific GPUs (Optional)**
 
 ```bash
-# 只使用GPU 0和1
+# Use only GPU 0 and 1
 export CUDA_VISIBLE_DEVICES=0,1
 bash scripts/train_multi_gpu.sh
 
-# 只使用GPU 2和3
+# Use only GPU 2 and 3
 export CUDA_VISIBLE_DEVICES=2,3
 bash scripts/train_multi_gpu.sh
 ```
 
 ---
 
-## 方案2️⃣: 多节点多GPU（SLURM）
+## Solution 2️⃣: Multi-Node Multi-GPU (SLURM)
 
-### 使用场景
-- 需要使用多台机器
-- 有SLURM作业调度器
-- 需要更大规模训练
+### Use Cases
+- Need to use multiple machines
+- Have SLURM job scheduler
+- Need larger scale training
 
-### 步骤
+### Steps
 
-**1. 修改SLURM脚本 `scripts/train_slurm_multi_node.sh`**
+**1. Modify SLURM script `scripts/train_slurm_multi_node.sh`**
 
-根据你的集群修改：
+Modify according to your cluster:
 ```bash
-#SBATCH --nodes=2                   # 节点数量
-#SBATCH --gpus-per-node=4          # 每节点GPU数量
-#SBATCH --partition=gpu            # 分区名称
+#SBATCH --nodes=2                   # Number of nodes
+#SBATCH --gpus-per-node=4          # Number of GPUs per node
+#SBATCH --partition=gpu            # Partition name
 ```
 
-**2. 修改配置文件 `accelerate_config_multi_node.yaml`**
+**2. Modify config file `accelerate_config_multi_node.yaml`**
 
 ```yaml
-num_machines: 2      # 节点数量
-num_processes: 8     # 总GPU数 = nodes × GPUs per node
+num_machines: 2      # Number of nodes
+num_processes: 8     # Total GPUs = nodes × GPUs per node
 ```
 
-**3. 提交作业**
+**3. Submit Job**
 
 ```bash
 sbatch scripts/train_slurm_multi_node.sh
 ```
 
-**4. 查看日志**
+**4. View Logs**
 
 ```bash
-# 查看输出
+# View output
 tail -f logs/train_JOBID.out
 
-# 查看错误
+# View errors
 tail -f logs/train_JOBID.err
 ```
 
 ---
 
-## ⚙️ 需要调整Learning Rate吗？
+## ⚙️ Do You Need to Adjust Learning Rate?
 
-当batch size增大时，通常需要调整learning rate：
+When batch size increases, usually you need to adjust the learning rate:
 
 ### Linear Scaling Rule
 ```
-新LR = 原LR × (新batch / 原batch)
+New LR = Original LR × (New batch / Original batch)
 ```
 
-**示例：**
+**Example:**
 ```yaml
-# 原配置 (1 GPU, batch=4)
+# Original config (1 GPU, batch=4)
 learning_rate: 1.25e-6
 
 # 2 GPUs (total batch=8)
@@ -124,16 +124,16 @@ learning_rate: 2.5e-6  # 1.25e-6 × 2
 learning_rate: 5.0e-6  # 1.25e-6 × 4
 ```
 
-**但要注意：**
-- 对于小batch size (< 256)，可能不需要线性缩放
-- 建议先测试原LR，如果不稳定再调整
-- 可以配合更长的warmup
+**But note:**
+- For small batch sizes (< 256), linear scaling may not be necessary
+- Recommend testing with original LR first, adjust if unstable
+- Can be combined with longer warmup
 
 ---
 
-## 🔍 验证多GPU是否生效
+## 🔍 Verify Multi-GPU is Working
 
-训练开始时会显示：
+At training start, you will see:
 
 ```
 Distributed environment: MULTI_GPU
@@ -141,90 +141,90 @@ Number of processes: 2
 Number of GPUs: 2
 ```
 
-使用 `nvidia-smi` 查看GPU使用：
+Use `nvidia-smi` to check GPU usage:
 ```bash
 watch -n 1 nvidia-smi
 ```
 
-应该看到多个GPU都有显存占用和GPU利用率。
+You should see multiple GPUs with memory usage and GPU utilization.
 
 ---
 
-## 🐛 常见问题
+## 🐛 Common Issues
 
-### 1. 报错：NCCL timeout
-**原因：** 节点间网络通信问题
+### 1. Error: NCCL timeout
+**Cause:** Network communication issues between nodes
 
-**解决：**
+**Solution:**
 ```python
-# 在 trainer.py 中已设置超时
+# Timeout already set in trainer.py
 init_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
 ```
 
-### 2. 报错：Out of memory
-**原因：** 每个GPU仍然加载相同的batch_size
+### 2. Error: Out of memory
+**Cause:** Each GPU still loads the same batch_size
 
-**解决：** 减小配置中的batch_size
+**Solution:** Reduce batch_size in config
 ```yaml
 data:
-  batch_size: 2  # 从4减到2
+  batch_size: 2  # Reduce from 4 to 2
 ```
 
-### 3. Loss震荡
-**原因：** Batch size变大导致训练不稳定
+### 3. Loss Oscillation
+**Cause:** Larger batch size causes training instability
 
-**解决：**
-- 增大warmup_steps
-- 降低learning rate
-- 使用gradient accumulation
+**Solution:**
+- Increase warmup_steps
+- Lower learning rate
+- Use gradient accumulation
 
 ---
 
-## 📈 性能对比
+## 📈 Performance Comparison
 
-预期加速比（理想情况）：
+Expected speedup (ideal case):
 
-| GPUs | 理论加速 | 实际加速 | 通信开销 |
+| GPUs | Theoretical Speedup | Actual Speedup | Communication Overhead |
 |------|----------|----------|----------|
 | 1 | 1.0x | 1.0x | 0% |
 | 2 | 2.0x | 1.8-1.9x | 5-10% |
 | 4 | 4.0x | 3.5-3.8x | 5-12% |
 | 8 | 8.0x | 6.5-7.0x | 12-18% |
 
-单节点通常比多节点效率更高（通信延迟更低）。
+Single-node is typically more efficient than multi-node (lower communication latency).
 
 ---
 
-## 🎯 建议的训练流程
+## 🎯 Recommended Training Workflow
 
-**第1步：单GPU验证代码** ✅ (你已完成)
+**Step 1: Single GPU code verification** ✅ (You've completed this)
 ```bash
 python train.py --config configs/debug_config.yaml
 ```
 
-**第2步：单节点2 GPU测试**
+**Step 2: Single-node 2 GPU test**
 ```bash
-# 修改 accelerate_config_single_node.yaml: num_processes: 2
+# Modify accelerate_config_single_node.yaml: num_processes: 2
 bash scripts/train_multi_gpu.sh
 ```
 
-**第3步：单节点全部GPU**
+**Step 3: Single-node all GPUs**
 ```bash
-# 修改 accelerate_config_single_node.yaml: num_processes: 4 (或你的GPU数)
+# Modify accelerate_config_single_node.yaml: num_processes: 4 (or your GPU count)
 bash scripts/train_multi_gpu.sh
 ```
 
-**第4步：（可选）多节点训练**
+**Step 4: (Optional) Multi-node training**
 ```bash
-# 修改 SLURM 脚本和配置
+# Modify SLURM script and config
 sbatch scripts/train_slurm_multi_node.sh
 ```
 
 ---
 
-## 📞 需要帮助？
+## 📞 Need Help?
 
-如果遇到问题，检查：
-1. `nvidia-smi` - 确认GPU可见
-2. 日志中的 "Number of processes" - 确认GPU数量正确
-3. Steps per epoch - 应该减少到原来的 1/N (N=GPU数量)
+If you encounter problems, check:
+1. `nvidia-smi` - Confirm GPUs are visible
+2. "Number of processes" in logs - Confirm GPU count is correct
+3. Steps per epoch - Should be reduced to 1/N of original (N=number of GPUs)
