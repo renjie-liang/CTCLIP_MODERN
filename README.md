@@ -1,270 +1,138 @@
-# CT-CLIP Modern Training Pipeline
+# Training Scripts and Configurations
 
-Refactored CT-CLIP training pipeline with epoch-based training, preprocessed WebDataset loading, and multi-GPU support.
+这个文件夹包含所有与训练相关的配置文件和提交脚本。
 
-## Key Features
-
-- **Epoch-based training** with automatic step calculation
-- **Preprocessed WebDataset** - no CPU preprocessing during training (~50-100ms/sample)
-- **Multi-GPU support** - single-node and multi-node (via Accelerate)
-- **Warmup + Cosine LR scheduling**
-- **Flexible evaluation** - configure by epochs or steps
-- **Clean, research-focused code**
-
-## Quick Start
-
-### Single GPU Training
-```bash
-python train.py --config configs/base_config.yaml
-```
-
-### Multi-GPU Training (2 GPUs)
-```bash
-bash scripts/train_multi_gpu.sh
-```
-
-### Debug Mode (Fast testing)
-```bash
-python train.py --config configs/debug_config.yaml
-```
-
----
-
-## Training Settings
-
-All settings in `configs/base_config.yaml`:
-
-### Basic Configuration
-```yaml
-training:
-  max_epochs: 20              # Train for 20 epochs
-  learning_rate: 1.25e-6      # Initial learning rate
-  warmup_steps: 1000          # Warmup for 1000 steps (~0.14 epochs)
-
-validation:
-  eval_every_n_epochs: 0.5    # Evaluate every 0.5 epoch
-  eval_samples: 200           # Validate on 200 samples (for speed)
-
-data:
-  batch_size: 4               # Per-GPU batch size
-  num_workers: 4              # DataLoader workers
-```
-
-### Key Points
-
-**Epoch vs Steps:**
-- Config uses **epochs** (easier to understand)
-- Training loop uses **steps** internally
-- With 29,500 samples and batch_size=4: 1 epoch ≈ 7,375 steps
-
-**Multi-GPU:**
-- With 2 GPUs: effective batch size = 8, steps per epoch = 3,687
-- With 4 GPUs: effective batch size = 16, steps per epoch = 1,843
-- Same epochs → same data coverage regardless of GPU count
-
-**Data Loading:**
-- Uses preprocessed WebDataset (no CPU preprocessing)
-- Fast loading: ~50-100ms per sample
-- Data already normalized, resized, cropped to (480, 480, 240)
-
----
-
-## Multi-GPU Training
-
-### Single-Node Multi-GPU (Recommended)
-
-**Setup (one-time):**
-```bash
-# Edit accelerate_config_single_node.yaml
-# Change num_processes to your GPU count (2, 4, 8, etc.)
-num_processes: 2  # for 2 GPUs
-```
-
-**Train:**
-```bash
-bash scripts/train_multi_gpu.sh
-```
-
-### Multi-Node Multi-GPU (SLURM)
-
-**Edit SLURM script:**
-```bash
-# Edit scripts/train_slurm_multi_node.sh
-#SBATCH --nodes=2
-#SBATCH --gpus-per-node=4
-```
-
-**Submit job:**
-```bash
-sbatch scripts/train_slurm_multi_node.sh
-```
-
-**See `scripts/MULTI_GPU_GUIDE.md` for detailed instructions.**
-
----
-
-## Project Structure
+## 文件夹结构
 
 ```
-CTCLIP_MODERN/
-├── train.py                           # Training entry point
-├── inference.py                       # Inference with bootstrap CI
-├── configs/
-│   ├── base_config.yaml              # Main training config (20 epochs)
-│   └── debug_config.yaml             # Fast testing (100 steps)
-├── accelerate_config_single_node.yaml # Single-node multi-GPU config
-├── accelerate_config_multi_node.yaml  # Multi-node config
-├── scripts/
-│   ├── train_multi_gpu.sh            # Single-node multi-GPU launcher
-│   ├── train_slurm_multi_node.sh     # SLURM multi-node launcher
-│   └── MULTI_GPU_GUIDE.md            # Detailed multi-GPU guide
-└── src/
-    ├── models/                        # CTViT and CT-CLIP
-    ├── data/                          # WebDataset loader
-    ├── training/                      # Trainer, optimizer, scheduler
-    ├── validation/                    # Metrics and evaluation
-    ├── checkpoint/                    # Checkpoint management
-    └── utils/                         # Config, seed, ETA calculator
+training/
+├── slurm/                          # SLURM 集群提交脚本
+│   ├── single_gpu.slurm            # 单节点单GPU训练
+│   ├── single_node_multi_gpu.slurm # 单节点多GPU训练
+│   └── multi_node_multi_gpu.slurm  # 多节点多GPU训练
+├── bash/                           # 非SLURM的训练脚本
+│   └── train_single_node_multi_gpu.sh  # 单节点多GPU训练（交互式/开发环境）
+└── configs/                        # Accelerate配置文件
+    ├── accelerate_single_node.yaml # 单节点多GPU的accelerate配置
+    └── accelerate_multi_node.yaml  # 多节点多GPU的accelerate配置
 ```
 
----
+## 使用说明
 
-## Resume Training
+### 1. 单节点单GPU训练 (SLURM)
+
+适用场景：快速测试、小规模训练
 
 ```bash
-python train.py \
-  --config configs/base_config.yaml \
-  --resume saves/checkpoint_step_5000.pt
+sbatch training/slurm/single_gpu.slurm
 ```
 
----
+配置：
+- 1个GPU
+- Batch size: 8
+- 不使用accelerate
+- 内存: 200GB
 
-## Inference
+### 2. 单节点多GPU训练 (SLURM)
+
+适用场景：中等规模训练、单机多卡加速
 
 ```bash
-# Basic inference
-python inference.py \
-  --checkpoint saves/best_model.pt \
-  --config configs/base_config.yaml \
-  --output results/results.json
-
-# With bootstrap confidence intervals (1000 samples)
-python inference.py \
-  --checkpoint saves/best_model.pt \
-  --config configs/base_config.yaml \
-  --bootstrap \
-  --n_bootstrap 1000
+sbatch training/slurm/single_node_multi_gpu.slurm
 ```
 
----
+配置：
+- 默认4个GPU (可修改 `#SBATCH --gres=gpu:4`)
+- 使用accelerate进行分布式训练
+- Batch size per GPU: 8
+- 有效 batch size: 32 (8 × 4)
+- 内存: 400GB
 
-## Training Progress
+**修改GPU数量：**
+1. 修改 `single_node_multi_gpu.slurm` 中的 `#SBATCH --gres=gpu:N`
+2. 修改 `configs/accelerate_single_node.yaml` 中的 `num_processes: N`
 
-You'll see detailed progress during training:
+### 3. 多节点多GPU训练 (SLURM)
 
-```
-Using epoch-based training: 20 epochs = 147500 steps
-  Dataset: 29500 samples / batch_size 4 = 7375 steps/epoch
+适用场景：大规模训练、需要多台机器
 
-Training duration: 20.00 epochs = 147500 steps
-Warmup: 1000 steps (0.14 epochs)
-Eval every: 3687 steps (0.50 epochs)
-Save every: 3687 steps (0.50 epochs)
-
-Step 5234/147500 (Epoch 0.71) | Loss: 0.1234 | LR: 1.2e-6 |
-Time/Step: 0.52s | ETA: 20h 34m | Elapsed: 45m 12s
-  GPU: 12.3GB / 80.0GB | Util: 76%
-```
-
----
-
-## Validation & Checkpointing
-
-**During Training:**
-- Validate every 0.5 epoch on 200 samples (fast)
-- Save checkpoint every 0.5 epoch
-- Keep best model based on AUROC
-- Keep last 3 checkpoints
-
-**Checkpoint Contains:**
-- Model weights
-- Optimizer state
-- Scheduler state
-- Global step, epoch
-- Validation metrics
-
----
-
-## Logging
-
-Supports multiple backends (configure in config file):
-
-- **WandB**: Online experiment tracking
-- **TensorBoard**: Local visualization
-- **Console**: Terminal output
-
-Enable in `configs/base_config.yaml`:
-```yaml
-logging:
-  use_wandb: true
-  use_tensorboard: false
-  use_console: true
-```
-
----
-
-## Performance
-
-**Single GPU (batch_size=4):**
-- Data loading: ~50-100ms/sample
-- Training: ~0.5s/step
-- 1 epoch ≈ 1 hour
-
-**2 GPUs (batch_size=4 each, total=8):**
-- Steps per epoch: 50% of single GPU
-- Training: ~0.3s/step
-- 1 epoch ≈ 30 minutes (~2x faster)
-
-**4 GPUs (batch_size=4 each, total=16):**
-- Steps per epoch: 25% of single GPU
-- Training: ~0.15s/step
-- 1 epoch ≈ 15 minutes (~4x faster)
-
----
-
-## Important Notes
-
-1. **Preprocessed data required** - use `train_preprocessed_webdataset/` shards
-2. **Random seed**: All seeds set to 2025 for reproducibility
-3. **Multi-GPU**: Learning rate scaling optional (test original LR first)
-4. **Gradient stride warning**: Can be safely ignored (performance impact <5%)
-
----
-
-## Troubleshooting
-
-**Out of memory:**
-```yaml
-data:
-  batch_size: 2  # Reduce from 4 to 2
-```
-
-**Multi-GPU not working:**
 ```bash
-# Check GPUs visible
-nvidia-smi
-
-# Test with debug config first
-bash scripts/train_multi_gpu.sh
+sbatch training/slurm/multi_node_multi_gpu.slurm
 ```
 
-**Slow data loading:**
-- Ensure using preprocessed shards (not raw data)
-- Check `num_workers` (4-8 recommended)
+配置：
+- 默认2个节点，每节点4个GPU (总共8个GPU)
+- 使用accelerate + srun进行分布式训练
+- 需要修改分区、账户等信息以适配你的集群
 
----
+**修改节点/GPU配置：**
+1. 修改 `multi_node_multi_gpu.slurm` 中的 `#SBATCH --nodes` 和 `#SBATCH --gpus-per-node`
+2. 修改 `configs/accelerate_multi_node.yaml` 中的 `num_machines` 和 `num_processes`
 
-## Questions?
+### 4. 单节点多GPU训练 (非SLURM)
 
-- Multi-GPU guide: `scripts/MULTI_GPU_GUIDE.md`
-- Code is clean and documented - read it!
+适用场景：交互式训练、开发环境、非SLURM集群
+
+```bash
+bash training/bash/train_single_node_multi_gpu.sh
+```
+
+或者直接使用accelerate命令：
+
+```bash
+accelerate launch \
+    --config_file training/configs/accelerate_single_node.yaml \
+    train.py \
+    --config configs/base_config.yaml
+```
+
+## Accelerate配置说明
+
+### accelerate_single_node.yaml
+
+单节点多GPU配置：
+- `num_processes`: GPU数量（默认2）
+- `mixed_precision`: fp16混合精度训练
+- `machine_rank`: 0（单机）
+
+### accelerate_multi_node.yaml
+
+多节点多GPU配置：
+- `num_machines`: 节点数量（默认2）
+- `num_processes`: 总GPU数量（默认8）
+- `machine_rank`: 会被环境变量覆盖
+- `main_process_ip`: 会被SLURM脚本设置
+
+## 注意事项
+
+1. **环境配置**：所有SLURM脚本都假设使用micromamba，如需修改请编辑相应的环境激活部分
+
+2. **路径配置**：SLURM脚本中包含特定的项目路径，使用前需要修改：
+   - `MAMBA_EXE`
+   - `MAMBA_ROOT_PREFIX`
+   - 项目目录路径
+
+3. **集群特定配置**：
+   - `--partition`: 分区名称
+   - `--account`: 账户名称
+   - `--qos`: QOS名称
+   - 根据你的集群配置修改这些参数
+
+4. **输出目录**：训练日志会保存在：
+   - SLURM输出: `out_slurm/`
+   - 训练日志: `logs/`
+   - 模型保存: `saves/`
+
+5. **Batch Size计算**：
+   - 单GPU: batch_size = 8
+   - 多GPU: 有效 batch_size = batch_size × num_gpus
+   - 例如：4个GPU时，有效batch_size = 8 × 4 = 32
+
+## 故障排查
+
+如果训练失败，请检查：
+1. SLURM输出文件 (`out_slurm/train_*.err`)
+2. GPU是否正常分配 (检查 `CUDA_VISIBLE_DEVICES`)
+3. Accelerate配置中的GPU数量是否匹配SLURM申请的GPU数量
+4. 内存是否足够 (多GPU训练可能需要更多内存)
+5. WebDataset路径是否正确

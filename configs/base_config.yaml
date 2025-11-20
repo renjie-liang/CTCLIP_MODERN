@@ -31,8 +31,8 @@ data:
 
   # DataLoader配置
   batch_size: 4
-  num_workers: 4  # DataLoader workers (4-8 recommended)
-  prefetch_factor: 2  # Number of batches to prefetch per worker
+  num_workers: 2  
+  prefetch_factor: 1  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
