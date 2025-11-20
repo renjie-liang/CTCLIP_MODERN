@@ -1,12 +1,12 @@
 """
-CTViT 基础层组件 (Basic Layer Components)
+CTViT Basic Layer Components
 
-包含：
-- Helper functions (辅助函数)
-- LayerNorm (层归一化)
-- GEGLU activation (门控激活函数)
-- FeedForward (前馈网络)
-- PEG (位置编码生成器)
+Contains:
+- Helper functions
+- LayerNorm (Layer Normalization)
+- GEGLU activation (Gated activation function)
+- FeedForward (Feedforward network)
+- PEG (Position Encoding Generator)
 """
 
 import math
@@ -19,23 +19,23 @@ from typing import Tuple, Optional
 
 
 # ============================================================================
-# Helper Functions (辅助函数)
+# Helper Functions
 # ============================================================================
 
 def exists(val):
-    """检查值是否存在 (不为None)"""
+    """Check if value exists (not None)"""
     return val is not None
 
 
 def default(val, d):
-    """如果值不存在，返回默认值"""
+    """If value doesn't exist, return default value"""
     return val if exists(val) else d
 
 
 def pair(val):
     """
-    将单个值转换为pair
-    例如: 480 -> (480, 480)
+    Convert single value to pair
+    Example: 480 -> (480, 480)
     """
     ret = (val, val) if not isinstance(val, tuple) else val
     assert len(ret) == 2
@@ -43,42 +43,42 @@ def pair(val):
 
 
 def leaky_relu(p=0.1):
-    """创建LeakyReLU激活函数"""
+    """Create LeakyReLU activation function"""
     return nn.LeakyReLU(p)
 
 
 def l2norm(t):
     """
-    L2归一化 (沿最后一个维度)
-    用于QK归一化，提升训练稳定性
+    L2 normalization (along last dimension)
+    Used for QK normalization, improves training stability
     """
     return F.normalize(t, dim=-1)
 
 
 # ============================================================================
-# LayerNorm (Bias-less版本)
+# LayerNorm (Bias-less version)
 # ============================================================================
 
 class LayerNorm(nn.Module):
     """
-    Bias-less LayerNorm (无偏置层归一化)
+    Bias-less LayerNorm (Layer Normalization without bias)
 
-    特点：
-    - 不使用bias参数
-    - 参考T5、PaLM等现代模型的设计
-    - 训练更稳定
+    Features:
+    - Does not use bias parameter
+    - Follows design of modern models like T5, PaLM
+    - More stable training
 
-    🔧 [现代化改造点] 可以升级为：
-    - RMSNorm: 更快，去掉mean centering，只做RMS归一化
-      实现: x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
-      性能提升: 5-10%加速
+    Modernization Opportunities:
+    - RMSNorm: Faster, removes mean centering, only does RMS normalization
+      Implementation: x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
+      Performance gain: 5-10% speedup
     """
 
     def __init__(self, dim):
         super().__init__()
-        # gamma: 可学习的缩放参数
+        # gamma: Learnable scaling parameter
         self.gamma = nn.Parameter(torch.ones(dim))
-        # beta: 固定为0的偏置（不可学习）
+        # beta: Fixed bias at 0 (not learnable)
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x):
@@ -86,68 +86,68 @@ class LayerNorm(nn.Module):
 
 
 # ============================================================================
-# GEGLU Activation (门控激活函数)
+# GEGLU Activation (Gated activation function)
 # ============================================================================
 
 class GEGLU(nn.Module):
     """
     GEGLU (Gated GLU with GELU activation)
 
-    公式: GEGLU(x) = GELU(x_gate) * x_value
-    其中 x_gate, x_value = x.chunk(2)
+    Formula: GEGLU(x) = GELU(x_gate) * x_value
+    where x_gate, x_value = x.chunk(2)
 
-    特点：
-    - 比标准ReLU/GELU性能更好
-    - 用于FeedForward网络
+    Features:
+    - Better performance than standard ReLU/GELU
+    - Used in FeedForward network
 
-    🔧 [现代化改造点] 可以升级为：
-    - SwiGLU: 使用Swish激活函数代替GELU
-      公式: Swish(x_gate) * x_value
-      参考: LLaMA, PaLM模型
-      性能: 通常比GEGLU略好
+    Modernization Opportunities:
+    - SwiGLU: Use Swish activation instead of GELU
+      Formula: Swish(x_gate) * x_value
+      Reference: LLaMA, PaLM models
+      Performance: Usually slightly better than GEGLU
     """
 
     def forward(self, x):
-        # 将输入分成两半：gate和value
+        # Split input into two halves: gate and value
         x, gate = x.chunk(2, dim=-1)
-        # 用GELU激活gate，然后与value相乘
+        # Activate gate with GELU, then multiply with value
         return F.gelu(gate) * x
 
 
 # ============================================================================
-# FeedForward Network (前馈网络)
+# FeedForward Network
 # ============================================================================
 
 def FeedForward(dim, mult=4, dropout=0.):
     """
-    FeedForward Network (前馈神经网络)
+    FeedForward Network
 
-    结构:
-        LayerNorm → Linear(扩展) → GEGLU → Dropout → Linear(压缩)
+    Architecture:
+        LayerNorm → Linear(expand) → GEGLU → Dropout → Linear(compress)
 
     Args:
-        dim: 输入/输出维度
-        mult: 隐藏层扩展倍数 (默认4倍)
-        dropout: Dropout比率
+        dim: Input/output dimension
+        mult: Hidden layer expansion multiplier (default 4x)
+        dropout: Dropout ratio
 
-    内部维度计算:
+    Inner dimension calculation:
         inner_dim = dim * mult * (2/3)
-        - mult=4时, inner_dim ≈ 2.67 * dim
-        - 乘以2是因为GEGLU需要split成两半
+        - When mult=4, inner_dim ≈ 2.67 * dim
+        - Multiply by 2 because GEGLU splits into two halves
 
-    🔧 [现代化改造点] 可以升级为：
-    1. 使用SwiGLU代替GEGLU (见GEGLU类注释)
-    2. 移除LayerNorm (某些架构如Pre-LN已在外层做)
-    3. 使用不同的扩展倍数 (LLaMA用8/3≈2.67, GPT-3用4)
+    Modernization Opportunities:
+    1. Use SwiGLU instead of GEGLU (see GEGLU class comments)
+    2. Remove LayerNorm (some architectures like Pre-LN do it outside)
+    3. Use different expansion multipliers (LLaMA uses 8/3≈2.67, GPT-3 uses 4)
     """
     inner_dim = int(mult * (2 / 3) * dim)
 
     return nn.Sequential(
-        nn.LayerNorm(dim),                      # 归一化
-        nn.Linear(dim, inner_dim * 2, bias=False),  # 扩展 (×2因为GEGLU要split)
-        GEGLU(),                                # 门控激活
+        nn.LayerNorm(dim),                      # Normalization
+        nn.Linear(dim, inner_dim * 2, bias=False),  # Expand (×2 because GEGLU splits)
+        GEGLU(),                                # Gated activation
         nn.Dropout(dropout),                    # Dropout
-        nn.Linear(inner_dim, dim, bias=False)   # 压缩回原维度
+        nn.Linear(inner_dim, dim, bias=False)   # Compress back to original dimension
     )
 
 
@@ -157,79 +157,79 @@ def FeedForward(dim, mult=4, dropout=0.):
 
 class PEG(nn.Module):
     """
-    PEG (Position Encoding Generator) - 位置编码生成器
+    PEG (Position Encoding Generator)
 
-    使用3D深度可分离卷积生成位置编码
+    Generates position encoding using 3D depthwise separable convolution
 
-    特点：
-    - 动态生成位置编码（不是固定的）
-    - 使用groups=dim的卷积（每个通道独立）
-    - 支持因果padding（用于时间维度）
+    Features:
+    - Dynamically generates position encoding (not fixed)
+    - Uses groups=dim convolution (each channel independent)
+    - Supports causal padding (for temporal dimension)
 
-    工作原理：
-    1. 通过3x3x3的深度卷积捕获局部位置信息
-    2. 与原始特征相加，为每个位置注入位置信息
+    Working principle:
+    1. Captures local positional information through 3x3x3 depthwise convolution
+    2. Adds to original features, injecting positional information for each position
 
     Args:
-        dim: 特征维度
-        causal: 是否使用因果padding（时间维度只看过去）
+        dim: Feature dimension
+        causal: Whether to use causal padding (temporal dimension only looks at past)
 
-    🔧 [现代化改造点] 可以优化为：
-    1. 使用可分离卷积 (Depthwise-Separable Conv):
+    Modernization Opportunities:
+    1. Use separable convolution (Depthwise-Separable Conv):
        - Conv3D(3x3x3) → Conv3D(3x1x1) + Conv3D(1x3x1) + Conv3D(1x1x3)
-       - 参数量和计算量大幅减少
+       - Significantly reduces parameters and computation
 
-    2. 可选择禁用PEG:
-       - 如果使用RoPE等其他位置编码，可能不需要PEG
-       - 某些任务下PEG提升有限
+    2. Option to disable PEG:
+       - If using other position encodings like RoPE, PEG may not be needed
+       - PEG improvement is limited for certain tasks
 
-    3. 使用更轻量的MLP:
-       - 用小型MLP代替卷积生成位置编码
+    3. Use lighter MLP:
+       - Replace convolution with small MLP to generate position encoding
     """
 
     def __init__(self, dim, causal=False):
         super().__init__()
         self.causal = causal
-        # 3D深度可分离卷积 (每个通道独立，groups=dim)
+        # 3D depthwise separable convolution (each channel independent, groups=dim)
         self.dsconv = nn.Conv3d(dim, dim, 3, groups=dim)
 
     @beartype
     def forward(self, x, shape: Tuple[int, int, int, int] = None):
         """
         Args:
-            x: 输入特征 (B, N, D) 或 (B, T, H, W, D)
-            shape: 如果输入是(B, N, D)，需要提供原始形状(B, T, H, W)
+            x: Input features (B, N, D) or (B, T, H, W, D)
+            shape: If input is (B, N, D), need to provide original shape (B, T, H, W)
 
         Returns:
-            位置编码后的特征
+            Position-encoded features
         """
         needs_shape = x.ndim == 3
         assert not (needs_shape and not exists(shape))
 
         orig_shape = x.shape
 
-        # 如果是flatten的，先reshape回来
+        # If flattened, reshape back
         if needs_shape:
             x = x.reshape(*shape, -1)
 
-        # 转换维度顺序: (B, T, H, W, D) -> (B, D, T, H, W)
+        # Rearrange dimensions: (B, T, H, W, D) -> (B, D, T, H, W)
         x = rearrange(x, 'b ... d -> b d ...')
 
-        # Padding策略
-        # 空间维度(H, W): 两边各padding 1 -> (1, 1, 1, 1)
-        # 时间维度(T): 根据causal选择
-        #   - causal=True: 只padding前面 -> (2, 0) 只看过去
-        #   - causal=False: 两边各padding 1 -> (1, 1)
+        # Padding strategy
+        # Spatial dimensions (H, W): pad 1 on each side -> (1, 1, 1, 1)
+        # Temporal dimension (T): depends on causal
+        #   - causal=True: only pad front -> (2, 0) only look at past
+        #   - causal=False: pad 1 on each side -> (1, 1)
         frame_padding = (2, 0) if self.causal else (1, 1)
         x = F.pad(x, (1, 1, 1, 1, *frame_padding), value=0.)
 
-        # 应用3D卷积
+        # Apply 3D convolution
         x = self.dsconv(x)
 
-        # 转回原来的维度顺序
+        # Rearrange back to original dimension order
         x = rearrange(x, 'b d ... -> b ... d')
 
-        # 如果原来是flatten的，flatten回去
+        # If originally flattened, flatten back
         if needs_shape:
             x = rearrange(x, 'b ... d -> b (...) d')
 

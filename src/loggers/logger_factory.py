@@ -1,7 +1,7 @@
 """
-Logger工厂函数
+Logger factory functions
 
-根据配置自动创建合适的logger
+Automatically create appropriate loggers based on configuration
 """
 
 from typing import Dict, Any, List
@@ -14,61 +14,61 @@ from .console_logger import ConsoleLogger
 
 class MultiLogger(BaseLogger):
     """
-    组合多个logger
+    Combine multiple loggers
 
-    同时记录到多个后端
+    Log to multiple backends simultaneously
     """
 
     def __init__(self, loggers: List[BaseLogger]):
         """
         Args:
-            loggers: logger列表
+            loggers: List of loggers
         """
         self.loggers = loggers
 
     def log_metrics(self, metrics, step=None, prefix=""):
-        """记录到所有logger"""
+        """Log to all loggers"""
         for logger in self.loggers:
             logger.log_metrics(metrics, step, prefix)
 
     def log_hyperparameters(self, config):
-        """记录到所有logger"""
+        """Log to all loggers"""
         for logger in self.loggers:
             logger.log_hyperparameters(config)
 
     def log_text(self, key, text, step=None):
-        """记录到所有logger"""
+        """Log to all loggers"""
         for logger in self.loggers:
             logger.log_text(key, text, step)
 
     def log_artifact(self, file_path, artifact_type="file"):
-        """记录到所有logger"""
+        """Log to all loggers"""
         for logger in self.loggers:
             logger.log_artifact(file_path, artifact_type)
 
     def watch_model(self, model, log_freq=100):
-        """监控模型（只有支持的logger）"""
+        """Monitor model (only supported loggers)"""
         for logger in self.loggers:
             try:
                 logger.watch_model(model, log_freq)
             except:
-                pass  # 某些logger可能不支持
+                pass  # Some loggers may not support this
 
     def finish(self):
-        """结束所有logger"""
+        """Finish all loggers"""
         for logger in self.loggers:
             logger.finish()
 
 
 def create_logger(config: Dict[str, Any]) -> BaseLogger:
     """
-    根据配置创建logger
+    Create logger based on configuration
 
     Args:
-        config: 完整配置字典
+        config: Complete configuration dictionary
 
     Returns:
-        Logger实例（可能是MultiLogger）
+        Logger instance (may be MultiLogger)
 
     Example:
         config = load_config("configs/base_config.yaml")
@@ -103,18 +103,18 @@ def create_logger(config: Dict[str, Any]) -> BaseLogger:
             warnings.warn(f"Failed to initialize WandB logger: {e}")
             print("✗ WandB logger disabled")
 
-    # TensorBoard Logger (可选，暂未实现)
+    # TensorBoard Logger (optional, not yet implemented)
     if logging_config.get('use_tensorboard', False):
         warnings.warn("TensorBoard logger not implemented yet")
 
-    # 确保至少有一个logger
+    # Ensure at least one logger exists
     if not loggers:
         warnings.warn("No logger enabled, using default console logger")
         loggers.append(ConsoleLogger())
 
-    # 如果只有一个logger，直接返回
+    # If only one logger, return it directly
     if len(loggers) == 1:
         return loggers[0]
 
-    # 多个logger，返回MultiLogger
+    # Multiple loggers, return MultiLogger
     return MultiLogger(loggers)

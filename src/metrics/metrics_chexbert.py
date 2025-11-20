@@ -124,5 +124,5 @@ def compute_chexbert_batch(
     corpus_score = round(float(class_report_5['micro avg']['f1-score']), 4)
     
     breakpoint()
-    ### 要不把所有的汇报了呢？
+    ### Should we report all metrics?
     return sentence_results, corpus_score

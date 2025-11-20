@@ -1,19 +1,19 @@
-# 大batch训练配置
+# Large batch training configuration
 _base_: "../base_config.yaml"
 
 experiment:
   name: "ct-clip-large-batch"
   tags: ["large-batch", "ctclip"]
-  notes: "使用gradient accumulation实现大batch训练"
+  notes: "Implement large batch training using gradient accumulation"
 
 data:
-  batch_size: 32  # 物理batch size
+  batch_size: 32  # physical batch size
 
 training:
   num_epochs: 100
-  learning_rate: 5e-6  # 大batch需要调整LR
-  gradient_accumulation_steps: 4  # 等效batch size = 32 * 4 = 128
-  warmup_steps: 2000  # 更长的warmup
+  learning_rate: 5e-6  # large batch requires LR adjustment
+  gradient_accumulation_steps: 4  # effective batch size = 32 * 4 = 128
+  warmup_steps: 2000  # longer warmup
 
 logging:
   wandb:

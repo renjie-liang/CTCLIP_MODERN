@@ -1,10 +1,10 @@
 """
-统一的疾病检测评估器
+Unified disease detection evaluator
 
-特点：
-1. 训练时：快速评估，不用bootstrap
-2. 推理时：完整评估，带bootstrap CI
-3. 保证训练和推理使用相同的评估逻辑
+Features:
+1. During training: Fast evaluation without bootstrap
+2. During inference: Complete evaluation with bootstrap CI
+3. Ensures training and inference use the same evaluation logic
 """
 
 import numpy as np
@@ -22,17 +22,17 @@ from .metrics import (
 
 class DiseaseEvaluator:
     """
-    疾病检测统一评估器
+    Unified disease detection evaluator
 
-    用法示例：
-        # 训练时（快速）
+    Usage example:
+        # During training (fast)
         evaluator = DiseaseEvaluator(
             pathology_classes=['Atelectasis', 'Cardiomegaly'],
             metrics=['auroc', 'auprc', 'f1'],
             use_bootstrap=False
         )
 
-        # 推理时（完整）
+        # During inference (complete)
         evaluator = DiseaseEvaluator(
             pathology_classes=['Atelectasis', 'Cardiomegaly'],
             metrics=['auroc', 'auprc', 'f1', 'precision', 'recall'],
@@ -40,7 +40,7 @@ class DiseaseEvaluator:
             n_bootstrap=1000
         )
 
-        # 评估
+        # Evaluate
         results = evaluator.evaluate(predictions, labels)
     """
 
@@ -56,14 +56,14 @@ class DiseaseEvaluator:
     ):
         """
         Args:
-            pathology_classes: 病理类别列表
-            metrics: 要计算的指标列表
-                支持: 'auroc', 'auprc', 'f1', 'precision', 'recall', 'specificity'
-            use_bootstrap: 是否使用bootstrap计算置信区间
-            n_bootstrap: bootstrap采样次数
-            bootstrap_ci: 置信区间水平 (default: 0.95 = 95% CI)
-            threshold: 二分类阈值 (default: 0.5)
-            random_state: 随机种子
+            pathology_classes: List of pathology classes
+            metrics: List of metrics to compute
+                Supported: 'auroc', 'auprc', 'f1', 'precision', 'recall', 'specificity'
+            use_bootstrap: Whether to use bootstrap to compute confidence intervals
+            n_bootstrap: Number of bootstrap samples
+            bootstrap_ci: Confidence interval level (default: 0.95 = 95% CI)
+            threshold: Binary classification threshold (default: 0.5)
+            random_state: Random seed
         """
         self.pathology_classes = pathology_classes
         self.num_classes = len(pathology_classes)
@@ -74,7 +74,7 @@ class DiseaseEvaluator:
         self.threshold = threshold
         self.random_state = random_state
 
-        # 验证metrics
+        # Validate metrics
         valid_metrics = {'auroc', 'auprc', 'f1', 'precision', 'recall', 'specificity', 'accuracy'}
         for m in metrics:
             if m not in valid_metrics:
@@ -88,26 +88,26 @@ class DiseaseEvaluator:
         verbose: bool = False
     ) -> Dict[str, float]:
         """
-        评估预测结果
+        Evaluate prediction results
 
         Args:
-            predictions: 预测分数 (N, num_classes), 范围[0, 1]
-            labels: 真实标签 (N, num_classes), 0/1
-            return_per_class: 是否返回每个类别的详细指标
-            verbose: 是否打印详细信息
+            predictions: Prediction scores (N, num_classes), range [0, 1]
+            labels: True labels (N, num_classes), 0/1
+            return_per_class: Whether to return detailed metrics for each class
+            verbose: Whether to print detailed information
 
         Returns:
-            评估结果字典，包含：
-            - macro_auroc, macro_auprc, ... (宏平均)
-            - 如果return_per_class=True:
+            Evaluation results dictionary containing:
+            - macro_auroc, macro_auprc, ... (macro average)
+            - If return_per_class=True:
                 per_class: {
                     'Atelectasis': {'auroc': 0.85, 'auprc': 0.72, ...},
                     ...
                 }
-            - 如果use_bootstrap=True，还包括CI:
+            - If use_bootstrap=True, also includes CI:
                 macro_auroc_ci_lower, macro_auroc_ci_upper, ...
         """
-        # 验证输入
+        # Validate input
         assert predictions.shape == labels.shape, \
             f"Shape mismatch: predictions {predictions.shape} vs labels {labels.shape}"
         assert predictions.shape[1] == self.num_classes, \
@@ -118,7 +118,7 @@ class DiseaseEvaluator:
             print(f"Metrics: {self.metrics}")
             print(f"Bootstrap: {self.use_bootstrap}")
 
-        # 计算每个类别的指标
+        # Compute metrics for each class
         per_class_metrics = {}
         skipped_classes = []  # Track classes with single-class issue
 
@@ -137,14 +137,14 @@ class DiseaseEvaluator:
         if skipped_classes and verbose:
             print(f"⚠️  {len(skipped_classes)}/{self.num_classes} classes skipped due to single-class samples: {skipped_classes[:3]}{'...' if len(skipped_classes) > 3 else ''}")
 
-        # 聚合指标（macro average）
+        # Aggregate metrics (macro average)
         results = aggregate_metrics(per_class_metrics, self.pathology_classes)
 
-        # 如果需要，添加每个类别的详细信息
+        # If needed, add detailed information for each class
         if return_per_class:
             results['per_class'] = per_class_metrics
 
-        # 如果使用bootstrap，计算置信区间
+        # If using bootstrap, compute confidence intervals
         if self.use_bootstrap:
             ci_results = self._compute_bootstrap_ci(predictions, labels, verbose=verbose)
             results.update(ci_results)
@@ -157,14 +157,14 @@ class DiseaseEvaluator:
         y_score: np.ndarray
     ) -> Dict[str, float]:
         """
-        评估单个类别
+        Evaluate a single class
 
         Args:
-            y_true: 真实标签 (N,)
-            y_score: 预测分数 (N,)
+            y_true: True labels (N,)
+            y_score: Prediction scores (N,)
 
         Returns:
-            该类别的所有指标
+            All metrics for this class
         """
         metrics_dict = {}
 
@@ -181,14 +181,14 @@ class DiseaseEvaluator:
             f1, _ = compute_f1_optimal(y_true, y_score)
             metrics_dict['f1'] = f1
 
-        # 基于固定阈值的指标
+        # Metrics based on fixed threshold
         need_cm_metrics = any(m in self.metrics for m in ['precision', 'recall', 'specificity', 'accuracy'])
 
         if need_cm_metrics:
             y_pred = (y_score >= self.threshold).astype(int)
             cm_metrics = compute_confusion_matrix_metrics(y_true, y_pred)
 
-            # 只添加请求的指标
+            # Only add requested metrics
             for metric_name in ['precision', 'recall', 'specificity', 'accuracy']:
                 if metric_name in self.metrics:
                     metrics_dict[metric_name] = cm_metrics[metric_name]
@@ -202,17 +202,17 @@ class DiseaseEvaluator:
         verbose: bool = False
     ) -> Dict[str, float]:
         """
-        使用bootstrap计算置信区间
+        Compute confidence intervals using bootstrap
 
-        对macro metrics计算CI
+        Compute CI for macro metrics
 
         Args:
             predictions: (N, num_classes)
             labels: (N, num_classes)
-            verbose: 是否显示进度
+            verbose: Whether to show progress
 
         Returns:
-            包含CI的字典: {
+            Dictionary containing CI: {
                 'macro_auroc_ci_lower': float,
                 'macro_auroc_ci_upper': float,
                 ...
@@ -224,16 +224,16 @@ class DiseaseEvaluator:
         n_samples = predictions.shape[0]
         np.random.seed(self.random_state)
 
-        # 存储每次bootstrap的macro metrics
+        # Store macro metrics for each bootstrap iteration
         bootstrap_results = {metric: [] for metric in self.metrics}
 
         for i in range(self.n_bootstrap):
-            # Bootstrap采样
+            # Bootstrap sampling
             indices = np.random.choice(n_samples, size=n_samples, replace=True)
             pred_boot = predictions[indices]
             label_boot = labels[indices]
 
-            # 计算每个类别的指标
+            # Compute metrics for each class
             per_class_boot = {}
             for j, class_name in enumerate(self.pathology_classes):
                 y_true = label_boot[:, j]
@@ -241,16 +241,16 @@ class DiseaseEvaluator:
                 class_metrics = self._evaluate_single_class(y_true, y_score)
                 per_class_boot[class_name] = class_metrics
 
-            # 聚合为macro
+            # Aggregate to macro
             macro_boot = aggregate_metrics(per_class_boot, self.pathology_classes)
 
-            # 记录macro指标
+            # Record macro metrics
             for metric in self.metrics:
                 key = f'macro_{metric}'
                 if key in macro_boot and not np.isnan(macro_boot[key]):
                     bootstrap_results[metric].append(macro_boot[key])
 
-        # 计算置信区间
+        # Compute confidence intervals
         ci_results = {}
         alpha = 1 - self.bootstrap_ci
         lower_percentile = (alpha / 2) * 100
@@ -276,19 +276,19 @@ class DiseaseEvaluator:
 
     def format_results(self, results: Dict, indent: int = 0) -> str:
         """
-        格式化结果为可读的字符串
+        Format results as a readable string
 
         Args:
-            results: evaluate()返回的结果
-            indent: 缩进级别
+            results: Results returned by evaluate()
+            indent: Indentation level
 
         Returns:
-            格式化的字符串
+            Formatted string
         """
         lines = []
         prefix = "  " * indent
 
-        # Macro指标
+        # Macro metrics
         lines.append(f"{prefix}Macro Metrics:")
         for metric in self.metrics:
             key = f'macro_{metric}'
@@ -296,7 +296,7 @@ class DiseaseEvaluator:
                 value = results[key]
                 line = f"{prefix}  {metric.upper()}: {value:.4f}"
 
-                # 如果有CI，添加
+                # If CI is available, add it
                 if self.use_bootstrap:
                     ci_lower_key = f'{key}_ci_lower'
                     ci_upper_key = f'{key}_ci_upper'
@@ -307,7 +307,7 @@ class DiseaseEvaluator:
 
                 lines.append(line)
 
-        # Per-class指标
+        # Per-class metrics
         if 'per_class' in results:
             lines.append(f"\n{prefix}Per-Class Metrics:")
             for class_name, class_metrics in results['per_class'].items():

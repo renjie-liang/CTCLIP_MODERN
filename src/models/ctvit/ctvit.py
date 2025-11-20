@@ -1,37 +1,37 @@
 """
 CTViT: 3D Vision Transformer for CT Volume Processing
-基于时空分离注意力机制的VQ-VAE自编码器
+VQ-VAE Autoencoder Based on Factorized Spatial-Temporal Attention
 
 Architecture Flow:
-    Input (B, C, T, H, W) - CT Volume数据
+    Input (B, C, T, H, W) - CT Volume Data
     ↓
-    Patch Embedding - 将3D volume切分为patches
+    Patch Embedding - Split 3D volume into patches
     ↓
-    Spatial Encoder - 对每个时间帧做空间注意力
+    Spatial Encoder - Spatial attention for each time frame
     ↓
-    Temporal Encoder - 对同一空间位置做时间注意力
+    Temporal Encoder - Temporal attention for each spatial location
     ↓
-    Vector Quantization (VQ) - 离散化编码
+    Vector Quantization (VQ) - Discrete encoding
     ↓
-    Temporal Decoder - 时间维度解码
+    Temporal Decoder - Temporal dimension decoding
     ↓
-    Spatial Decoder - 空间维度解码
+    Spatial Decoder - Spatial dimension decoding
     ↓
-    Pixel Reconstruction - 重建为原始尺寸
+    Pixel Reconstruction - Reconstruct to original size
     ↓
-    Output (B, C, T, H, W) - 重建的volume
+    Output (B, C, T, H, W) - Reconstructed volume
 
 Key Features:
-    1. Factorized Spatial-Temporal Attention (时空分离注意力)
-    2. Vector Quantization for discrete representation (VQ离散化表示)
-    3. Continuous Position Bias (连续位置偏置)
-    4. PEG Position Encoding (位置编码生成器)
+    1. Factorized Spatial-Temporal Attention
+    2. Vector Quantization for discrete representation
+    3. Continuous Position Bias
+    4. PEG (Position Encoding Generator)
 
-🔧 [整体架构现代化改造方向]:
-1. 使用Flash Attention加速注意力计算
-2. 引入Grouped-Query Attention减少KV cache
-3. 替换为更高效的位置编码 (如RoPE)
-4. 考虑使用混合专家(MOE)增加模型容量
+Modernization Opportunities - Overall Architecture:
+1. Use Flash Attention to accelerate attention computation
+2. Introduce Grouped-Query Attention to reduce KV cache
+3. Replace with more efficient positional encoding (e.g., RoPE)
+4. Consider using Mixture of Experts (MOE) to increase model capacity
 """
 
 import copy
@@ -59,27 +59,27 @@ class CTViT(nn.Module):
     """
     CTViT: 3D Vision Transformer for CT Volumes
 
-    基于时空分离注意力机制的VQ-VAE模型，用于CT体积数据的编码和重建
+    VQ-VAE model based on factorized spatial-temporal attention for CT volume encoding and reconstruction
 
     Args:
-        dim: Transformer隐藏维度 (例如: 512)
-        codebook_size: VQ码本大小 (例如: 8192)
-        image_size: 图像尺寸 H, W (例如: 480)
-        patch_size: Patch大小 (例如: 20, 则每个patch为20x20)
-        temporal_patch_size: 时间维度patch大小 (例如: 10)
-        spatial_depth: 空间Transformer层数 (例如: 4)
-        temporal_depth: 时间Transformer层数 (例如: 4)
-        dim_head: 每个注意力头的维度 (默认: 64)
-        heads: 注意力头数 (默认: 8)
-        channels: 输入通道数 (CT通常为1)
-        attn_dropout: 注意力层dropout (默认: 0.)
-        ff_dropout: FeedForward层dropout (默认: 0.)
+        dim: Transformer hidden dimension (e.g., 512)
+        codebook_size: VQ codebook size (e.g., 8192)
+        image_size: Image size H, W (e.g., 480)
+        patch_size: Patch size (e.g., 20, each patch is 20x20)
+        temporal_patch_size: Temporal dimension patch size (e.g., 10)
+        spatial_depth: Number of spatial Transformer layers (e.g., 4)
+        temporal_depth: Number of temporal Transformer layers (e.g., 4)
+        dim_head: Dimension per attention head (default: 64)
+        heads: Number of attention heads (default: 8)
+        channels: Number of input channels (typically 1 for CT)
+        attn_dropout: Attention layer dropout (default: 0.)
+        ff_dropout: FeedForward layer dropout (default: 0.)
 
     Input Shape:
         (B, C, T, H, W) - Batch, Channels, Time, Height, Width
 
     Output Modes:
-        1. 默认: (recon_loss, commit_loss, recon_video)
+        1. Default: (recon_loss, commit_loss, recon_video)
         2. return_recons_only=True: recon_video
         3. return_only_codebook_ids=True: indices
         4. return_encoded_tokens=True: tokens
@@ -103,7 +103,7 @@ class CTViT(nn.Module):
         profile_timing: bool = False
     ):
         """
-        初始化CTViT模型
+        Initialize CTViT model
 
         Einstein Notation:
             b - batch
@@ -116,7 +116,7 @@ class CTViT(nn.Module):
         """
         super().__init__()
 
-        # ===== 基本配置 =====
+        # ===== Basic Configuration =====
         self.image_size = pair(image_size)  # (H, W)
         self.patch_size = pair(patch_size)  # (pH, pW)
         patch_height, patch_width = self.patch_size
@@ -129,78 +129,78 @@ class CTViT(nn.Module):
             print("⚠️  CTViT: Performance profiling enabled")
         self.timing_buffer = {}
 
-        # 检查尺寸是否能被patch size整除
+        # Check if size is divisible by patch size
         image_height, image_width = self.image_size
         assert (image_height % patch_height) == 0 and (image_width % patch_width) == 0, \
             f"Image size {self.image_size} must be divisible by patch size {self.patch_size}"
 
-        # ===== 位置编码 =====
-        # 空间维度的连续位置偏置 (用于Spatial Transformer)
+        # ===== Position Encoding =====
+        # Continuous position bias for spatial dimensions (used by Spatial Transformer)
         self.spatial_rel_pos_bias = ContinuousPositionBias(dim=dim, heads=heads)
 
         # ===== Patch Embedding =====
-        # 将3D volume切分为patches并映射到embedding空间
+        # Split 3D volume into patches and map to embedding space
         # Input:  (B, C, T, H, W)
-        # Output: (B, T', H', W', D) 其中 T'=T/pt, H'=H/pH, W'=W/pW
+        # Output: (B, T', H', W', D) where T'=T/pt, H'=H/pH, W'=W/pW
         self.to_patch_emb = nn.Sequential(
-            # Rearrange: 切分patches
+            # Rearrange: Split patches
             # (B, C, T, H, W) -> (B, T/pt, H/pH, W/pW, C*pt*pH*pW)
             Rearrange(
                 'b c (t pt) (h p1) (w p2) -> b t h w (c pt p1 p2)',
                 p1=patch_height, p2=patch_width, pt=temporal_patch_size
             ),
-            # 归一化
+            # Normalization
             nn.LayerNorm(channels * patch_width * patch_height * temporal_patch_size),
-            # 线性投影到隐藏维度
+            # Linear projection to hidden dimension
             nn.Linear(channels * patch_width * patch_height * temporal_patch_size, dim),
-            # 再次归一化
+            # Normalization again
             nn.LayerNorm(dim)
         )
 
-        # ===== Transformer配置 =====
+        # ===== Transformer Configuration =====
         transformer_kwargs = dict(
             dim=dim,
             dim_head=dim_head,
             heads=heads,
             attn_dropout=attn_dropout,
             ff_dropout=ff_dropout,
-            peg=True,        # 使用PEG位置编码
-            peg_causal=True, # 时间维度使用因果padding
+            peg=True,        # Use PEG position encoding
+            peg_causal=True, # Use causal padding for temporal dimension
         )
 
-        # ===== 编码器 (Encoder) =====
-        # 1. 空间编码器: 对每个时间帧的空间patches做注意力
+        # ===== Encoder =====
+        # 1. Spatial Encoder: Attention over spatial patches for each time frame
         self.enc_spatial_transformer = Transformer(depth=spatial_depth, **transformer_kwargs)
 
-        # 2. 时间编码器: 对同一空间位置的时间序列做注意力
+        # 2. Temporal Encoder: Attention over time sequence for each spatial location
         self.enc_temporal_transformer = Transformer(depth=temporal_depth, **transformer_kwargs)
 
         # ===== Vector Quantization =====
-        # 将连续特征量化为离散的codebook索引
+        # Quantize continuous features to discrete codebook indices
         self.vq = VectorQuantize(
             dim=dim,
             codebook_size=codebook_size,
-            use_cosine_sim=True  # 使用余弦相似度进行量化
+            use_cosine_sim=True  # Use cosine similarity for quantization
         )
 
-        # ===== 解码器 (Decoder) =====
-        # 注意: 原始代码缺少解码器定义，这里补充完整
-        # 解码器结构与编码器对称，但顺序相反: 时间 -> 空间
+        # ===== Decoder =====
+        # Note: Original code was missing decoder definition, completed here
+        # Decoder structure is symmetric to encoder but in reverse order: Temporal -> Spatial
 
-        # 1. 时间解码器
+        # 1. Temporal Decoder
         self.dec_temporal_transformer = Transformer(depth=temporal_depth, **transformer_kwargs)
 
-        # 2. 空间解码器
+        # 2. Spatial Decoder
         self.dec_spatial_transformer = Transformer(depth=spatial_depth, **transformer_kwargs)
 
-        # ===== 像素重建层 =====
-        # 将patches映射回像素空间
+        # ===== Pixel Reconstruction Layer =====
+        # Map patches back to pixel space
         # Input:  (B, T', H', W', D)
         # Output: (B, C, T, H, W)
         self.to_pixels = nn.Sequential(
-            # 线性投影: D -> C*pt*pH*pW
+            # Linear projection: D -> C*pt*pH*pW
             nn.Linear(dim, channels * patch_width * patch_height * temporal_patch_size),
-            # Rearrange: 重组为原始形状
+            # Rearrange: Reconstruct to original shape
             # (B, T', H', W', C*pt*pH*pW) -> (B, C, T, H, W)
             Rearrange(
                 'b t h w (c pt p1 p2) -> b c (t pt) (h p1) (w p2)',
@@ -210,17 +210,17 @@ class CTViT(nn.Module):
 
     @property
     def patch_height_width(self):
-        """返回patch grid的尺寸 (H', W')"""
+        """Return patch grid dimensions (H', W')"""
         return self.image_size[0] // self.patch_size[0], self.image_size[1] // self.patch_size[1]
 
     @property
     def image_num_tokens(self):
-        """返回每个时间帧的token数量"""
+        """Return number of tokens per time frame"""
         return int(self.image_size[0] / self.patch_size[0]) * int(self.image_size[1] / self.patch_size[1])
 
     def encode(self, tokens: torch.Tensor) -> torch.Tensor:
         """
-        编码过程: 空间注意力 -> 时间注意力
+        Encoding process: Spatial attention -> Temporal attention
 
         Args:
             tokens: (B, T', H', W', D) - Patch embeddings
@@ -233,8 +233,8 @@ class CTViT(nn.Module):
 
         video_shape = tuple(tokens.shape[:-1])  # (B, T', H', W')
 
-        # ===== 空间编码 (Spatial Encoding) =====
-        # 对每个时间帧独立做空间注意力
+        # ===== Spatial Encoding =====
+        # Independent spatial attention for each time frame
         # (B, T', H', W', D) -> (B*T', H'*W', D)
         if self.profile_timing:
             torch.cuda.synchronize()
@@ -246,7 +246,7 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['rearrange_spatial_in'] = time.time() - t_start
 
-        # 计算空间位置偏置
+        # Compute spatial positional bias
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start = time.time()
@@ -257,7 +257,7 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['spatial_pos_bias'] = time.time() - t_start
 
-        # 空间Transformer
+        # Spatial Transformer
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start = time.time()
@@ -268,7 +268,7 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['spatial_transformer'] = time.time() - t_start
 
-        # Reshape回4D: (B*T', H'*W', D) -> (B, T', H', W', D)
+        # Reshape back to 4D: (B*T', H'*W', D) -> (B, T', H', W', D)
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start = time.time()
@@ -279,8 +279,8 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['rearrange_spatial_out'] = time.time() - t_start
 
-        # ===== 时间编码 (Temporal Encoding) =====
-        # 对同一空间位置的时间序列做注意力
+        # ===== Temporal Encoding =====
+        # Attention over time sequence for each spatial location
         # (B, T', H', W', D) -> (B*H'*W', T', D)
         if self.profile_timing:
             torch.cuda.synchronize()
@@ -292,7 +292,7 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['rearrange_temporal_in'] = time.time() - t_start
 
-        # 时间Transformer
+        # Temporal Transformer
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start = time.time()
@@ -303,7 +303,7 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['temporal_transformer'] = time.time() - t_start
 
-        # Reshape回4D: (B*H'*W', T', D) -> (B, T', H', W', D)
+        # Reshape back to 4D: (B*H'*W', T', D) -> (B, T', H', W', D)
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start = time.time()
@@ -318,51 +318,51 @@ class CTViT(nn.Module):
 
     def decode(self, tokens: torch.Tensor) -> torch.Tensor:
         """
-        解码过程: 时间注意力 -> 空间注意力 -> 像素重建
+        Decoding process: Temporal attention -> Spatial attention -> Pixel reconstruction
 
-        注意: 解码顺序与编码相反
-            编码: 空间 -> 时间
-            解码: 时间 -> 空间
+        Note: Decoding order is reverse of encoding
+            Encoding: Spatial -> Temporal
+            Decoding: Temporal -> Spatial
 
         Args:
-            tokens: (B, T', H', W', D) 或 (B, N, D) - Quantized tokens
+            tokens: (B, T', H', W', D) or (B, N, D) - Quantized tokens
 
         Returns:
-            recon_video: (B, C, T, H, W) - 重建的video
+            recon_video: (B, C, T, H, W) - Reconstructed video
         """
         b = tokens.shape[0]
         h, w = self.patch_height_width
 
-        # 如果输入是flatten的 (B, N, D)，先reshape为4D
+        # If input is flattened (B, N, D), reshape to 4D first
         if tokens.ndim == 3:
             tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=h, w=w)
 
         video_shape = tuple(tokens.shape[:-1])  # (B, T', H', W')
 
-        # ===== 时间解码 (Temporal Decoding) =====
+        # ===== Temporal Decoding =====
         # (B, T', H', W', D) -> (B*H'*W', T', D)
         tokens = rearrange(tokens, 'b t h w d -> (b h w) t d')
 
-        # 时间Transformer
+        # Temporal Transformer
         tokens = self.dec_temporal_transformer(tokens, video_shape=video_shape)
 
         # Reshape: (B*H'*W', T', D) -> (B, T', H', W', D)
         tokens = rearrange(tokens, '(b h w) t d -> b t h w d', b=b, h=h, w=w)
 
-        # ===== 空间解码 (Spatial Decoding) =====
+        # ===== Spatial Decoding =====
         # (B, T', H', W', D) -> (B*T', H'*W', D)
         tokens = rearrange(tokens, 'b t h w d -> (b t) (h w) d')
 
-        # 计算空间位置偏置
+        # Compute spatial positional bias
         attn_bias = self.spatial_rel_pos_bias(h, w, device=tokens.device)
 
-        # 空间Transformer
+        # Spatial Transformer
         tokens = self.dec_spatial_transformer(tokens, attn_bias=attn_bias, video_shape=video_shape)
 
         # Reshape: (B*T', H'*W', D) -> (B, T', H', W', D)
         tokens = rearrange(tokens, '(b t) (h w) d -> b t h w d', b=b, h=h, w=w)
 
-        # ===== 像素重建 =====
+        # ===== Pixel Reconstruction =====
         # (B, T', H', W', D) -> (B, C, T, H, W)
         recon_video = self.to_pixels(tokens)
 
@@ -377,35 +377,35 @@ class CTViT(nn.Module):
         return_encoded_tokens: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
         """
-        前向传播
+        Forward pass
 
         Args:
-            video: (B, C, T, H, W) - 输入CT volume
-            mask: (B, T) - 可选的时间mask (True=保留, False=mask)
-            return_recons_only: 是否只返回重建结果
-            return_only_codebook_ids: 是否只返回VQ索引
-            return_encoded_tokens: 是否只返回编码后的tokens
+            video: (B, C, T, H, W) - Input CT volume
+            mask: (B, T) - Optional temporal mask (True=keep, False=mask)
+            return_recons_only: Whether to return only reconstruction result
+            return_only_codebook_ids: Whether to return only VQ indices
+            return_encoded_tokens: Whether to return only encoded tokens
 
         Returns:
-            默认: (recon_loss, commit_loss, recon_video)
+            Default: (recon_loss, commit_loss, recon_video)
             return_recons_only=True: recon_video
             return_only_codebook_ids=True: indices
             return_encoded_tokens=True: tokens
 
         Note:
-            - 输入必须是5D tensor (video格式)
-            - 原始代码的is_image分支已删除，因为实际使用中只需要video输入
+            - Input must be 5D tensor (video format)
+            - Original is_image branch removed as only video input is needed in practice
         """
-        # ===== 输入检查 =====
+        # ===== Input Validation =====
         assert video.ndim == 5, f"Input must be 5D (B, C, T, H, W), got shape {video.shape}"
 
         b, c, f, *image_dims, device = *video.shape, video.device
 
-        # 检查图像尺寸
+        # Check image dimensions
         assert tuple(image_dims) == self.image_size, \
             f"Input image size {image_dims} doesn't match model image size {self.image_size}"
 
-        # 检查mask尺寸
+        # Check mask dimensions
         assert not exists(mask) or mask.shape[-1] == f, \
             f"Mask temporal dimension {mask.shape[-1]} doesn't match video frames {f}"
 
@@ -427,10 +427,10 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['patch_embedding'] = time.time() - t_start
 
-        # 保存shape信息
+        # Save shape information
         *_, h, w, _ = tokens.shape
 
-        # ===== 2. 编码 (Spatial -> Temporal) =====
+        # ===== 2. Encode (Spatial -> Temporal) =====
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start = time.time()
@@ -449,30 +449,30 @@ class CTViT(nn.Module):
 
         tokens, packed_fhw_shape = pack([tokens], 'b * d')
 
-        # 计算VQ mask (如果提供了时间mask)
+        # Compute VQ mask (if temporal mask is provided)
         vq_mask = None
         if exists(mask):
             vq_mask = self.calculate_video_token_mask(video, mask)
 
-        # VQ量化
-        # tokens: 量化后的连续特征
-        # indices: codebook索引
-        # commit_loss: VQ承诺损失
+        # VQ quantization
+        # tokens: Quantized continuous features
+        # indices: Codebook indices
+        # commit_loss: VQ commitment loss
         tokens, indices, commit_loss = self.vq(tokens, mask=vq_mask)
 
         if self.profile_timing:
             torch.cuda.synchronize()
             self.timing_buffer['vector_quantization'] = time.time() - t_start
 
-        # 如果只需要返回codebook索引
+        # If only need to return codebook indices
         if return_only_codebook_ids:
             indices, = unpack(indices, packed_fhw_shape, 'b *')
             return indices
 
-        # Reshape回4D: (B, T'*H'*W', D) -> (B, T', H', W', D)
+        # Reshape back to 4D: (B, T'*H'*W', D) -> (B, T', H', W', D)
         tokens = rearrange(tokens, 'b (t h w) d -> b t h w d', h=h, w=w)
 
-        # 如果只需要返回编码后的tokens
+        # If only need to return encoded tokens
         if return_encoded_tokens:
             if self.profile_timing:
                 torch.cuda.synchronize()
@@ -481,28 +481,28 @@ class CTViT(nn.Module):
                 self._print_timing_stats()
             return tokens
 
-        # ===== 4. 解码 (Temporal -> Spatial -> Pixels) =====
+        # ===== 4. Decode (Temporal -> Spatial -> Pixels) =====
         recon_video = self.decode(tokens)
 
-        # 如果只需要返回重建结果
+        # If only need to return reconstruction result
         if return_recons_only:
             return recon_video
 
-        # ===== 5. 计算损失 =====
-        # 重建损失 (MSE)
+        # ===== 5. Compute Loss =====
+        # Reconstruction loss (MSE)
         if exists(mask):
-            # 如果有mask，只计算非mask位置的损失
+            # If mask exists, only compute loss for non-masked positions
             recon_loss = F.mse_loss(video, recon_video, reduction='none')
-            # 应用mask: (B, T) -> (B, C, T, 1, 1)
+            # Apply mask: (B, T) -> (B, C, T, 1, 1)
             mask_expanded = repeat(mask, 'b t -> b c t 1 1', c=c)
             recon_loss = recon_loss[mask_expanded]
             recon_loss = recon_loss.mean()
         else:
-            # 全部位置都计算损失
+            # Compute loss for all positions
             recon_loss = F.mse_loss(video, recon_video)
 
-        # ===== 6. 返回结果 =====
-        # 返回: (重建损失, VQ承诺损失, 重建video)
+        # ===== 6. Return Results =====
+        # Return: (reconstruction loss, VQ commitment loss, reconstructed video)
         return recon_loss, commit_loss, recon_video
 
     def _print_timing_stats(self):
@@ -540,37 +540,37 @@ class CTViT(nn.Module):
 
     def calculate_video_token_mask(self, videos: torch.Tensor, video_frame_mask: torch.Tensor) -> torch.Tensor:
         """
-        计算token级别的mask (用于VQ)
+        Compute token-level mask (for VQ)
 
-        将帧级别的mask转换为token级别的mask
+        Convert frame-level mask to token-level mask
 
         Args:
             videos: (B, C, T, H, W)
-            video_frame_mask: (B, T) - 帧级别mask
+            video_frame_mask: (B, T) - Frame-level mask
 
         Returns:
-            token_mask: (B, N) - Token级别mask, N = T' * H' * W'
+            token_mask: (B, N) - Token-level mask, N = T' * H' * W'
         """
         *_, h, w = videos.shape
         ph, pw = self.patch_size
 
-        # 将帧mask按temporal_patch_size分组
-        # 如果一组内有任何帧为True，则该patch为True
+        # Group frame mask by temporal_patch_size
+        # If any frame in a group is True, that patch is True
         rest_vq_mask = rearrange(video_frame_mask, 'b (f p) -> b f p', p=self.temporal_patch_size)
         video_mask = rest_vq_mask.any(dim=-1)  # (B, T')
 
-        # 扩展到所有空间位置
+        # Expand to all spatial locations
         # (B, T') -> (B, T' * H' * W')
         return repeat(video_mask, 'b f -> b (f hw)', hw=(h // ph) * (w // pw))
 
     def copy_for_eval(self):
         """
-        创建模型的评估副本
+        Create evaluation copy of the model
 
-        用于保存/部署时去除训练相关组件
+        Used for saving/deployment to remove training-related components
 
         Returns:
-            vae_copy: 评估模式的模型副本
+            vae_copy: Model copy in evaluation mode
         """
         device = next(self.parameters()).device
         vae_copy = copy.deepcopy(self.cpu())
@@ -579,10 +579,10 @@ class CTViT(nn.Module):
 
     def load(self, path: Union[str, Path]):
         """
-        从checkpoint加载模型权重
+        Load model weights from checkpoint
 
         Args:
-            path: checkpoint文件路径
+            path: Path to checkpoint file
         """
         path = Path(path)
         assert path.exists(), f"Checkpoint not found: {path}"
@@ -591,37 +591,37 @@ class CTViT(nn.Module):
 
     def decode_from_codebook_indices(self, indices: torch.Tensor) -> torch.Tensor:
         """
-        从codebook索引直接解码
+        Decode directly from codebook indices
 
-        用于从离散索引重建video
+        Used to reconstruct video from discrete indices
 
         Args:
-            indices: (B, N) - Codebook索引
+            indices: (B, N) - Codebook indices
 
         Returns:
-            recon_video: (B, C, T, H, W) - 重建的video
+            recon_video: (B, C, T, H, W) - Reconstructed video
         """
-        # 从codebook获取对应的特征向量
+        # Get corresponding feature vectors from codebook
         codes = self.vq.codebook[indices]
-        # 解码
+        # Decode
         return self.decode(codes)
 
     def num_tokens_per_frames(self, num_frames: int, include_first_frame: bool = True) -> int:
         """
-        计算给定帧数对应的token数量
+        Compute number of tokens for given number of frames
 
         Args:
-            num_frames: 帧数
-            include_first_frame: 是否包含第一帧 (兼容旧代码，实际上已不区分)
+            num_frames: Number of frames
+            include_first_frame: Whether to include first frame (for backward compatibility, no longer distinguished)
 
         Returns:
-            total_tokens: Token总数
+            total_tokens: Total number of tokens
         """
         image_num_tokens = self.image_num_tokens
 
-        # 检查帧数能否被temporal_patch_size整除
+        # Check if num_frames is divisible by temporal_patch_size
         assert (num_frames % self.temporal_patch_size) == 0, \
             f"num_frames {num_frames} must be divisible by temporal_patch_size {self.temporal_patch_size}"
 
-        # 计算: (T / temporal_patch_size) * (H' * W')
+        # Compute: (T / temporal_patch_size) * (H' * W')
         return int(num_frames / self.temporal_patch_size) * image_num_tokens

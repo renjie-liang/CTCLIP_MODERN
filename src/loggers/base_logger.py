@@ -1,7 +1,7 @@
 """
-抽象日志接口
+Abstract logging interface
 
-定义所有logger必须实现的方法
+Defines methods that all loggers must implement
 """
 
 from abc import ABC, abstractmethod
@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 class BaseLogger(ABC):
-    """日志记录器基类"""
+    """Base class for loggers"""
 
     @abstractmethod
     def log_metrics(
@@ -20,68 +20,68 @@ class BaseLogger(ABC):
         prefix: str = ""
     ) -> None:
         """
-        记录指标
+        Log metrics
 
         Args:
-            metrics: 指标字典 {'loss': 0.5, 'auroc': 0.85}
-            step: 当前步数/epoch
-            prefix: 前缀，如 'train/', 'val/'
+            metrics: Metrics dictionary {'loss': 0.5, 'auroc': 0.85}
+            step: Current step/epoch
+            prefix: Prefix such as 'train/', 'val/'
         """
         pass
 
     @abstractmethod
     def log_hyperparameters(self, config: Dict[str, Any]) -> None:
         """
-        记录超参数
+        Log hyperparameters
 
         Args:
-            config: 配置字典
+            config: Configuration dictionary
         """
         pass
 
     @abstractmethod
     def log_text(self, key: str, text: str, step: Optional[int] = None) -> None:
         """
-        记录文本
+        Log text
 
         Args:
-            key: 文本键名
-            text: 文本内容
-            step: 步数
+            key: Text key name
+            text: Text content
+            step: Step number
         """
         pass
 
     def log_artifact(self, file_path: str, artifact_type: str = "file") -> None:
         """
-        上传文件
+        Upload file
 
         Args:
-            file_path: 文件路径
-            artifact_type: 文件类型标签
+            file_path: File path
+            artifact_type: File type label
         """
-        # 默认实现：不做任何事
+        # Default implementation: do nothing
         pass
 
     def watch_model(self, model, log_freq: int = 100) -> None:
         """
-        监控模型（梯度、参数等）
+        Monitor model (gradients, parameters, etc.)
 
         Args:
-            model: PyTorch模型
-            log_freq: 记录频率
+            model: PyTorch model
+            log_freq: Logging frequency
         """
-        # 默认实现：不做任何事
+        # Default implementation: do nothing
         pass
 
     @abstractmethod
     def finish(self) -> None:
-        """结束日志记录"""
+        """Finish logging"""
         pass
 
     def __enter__(self):
-        """Context manager支持"""
+        """Context manager support"""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager支持"""
+        """Context manager support"""
         self.finish()

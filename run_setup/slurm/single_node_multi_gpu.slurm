@@ -2,10 +2,10 @@
 
 #SBATCH --job-name=ctclip_train_multi_gpu
 #SBATCH --partition=hpg-b200
-#SBATCH --gres=gpu:2              # 使用4个GPU (可以改成2/8等)
-#SBATCH --nodes=1                 # 单节点
-#SBATCH --cpus-per-task=32        # 建议增加CPU以匹配GPU数量
-#SBATCH --mem=400gb               # 建议增加内存以匹配GPU数量
+#SBATCH --gres=gpu:2              # Use 2 GPUs (can change to 4/8 etc.)
+#SBATCH --nodes=1                 # Single node
+#SBATCH --cpus-per-task=32        # Recommended to increase CPUs to match GPU count
+#SBATCH --mem=400gb               # Recommended to increase memory to match GPU count
 #SBATCH --time=72:00:00
 #SBATCH --account=xujie
 #SBATCH --qos=xujie
@@ -53,7 +53,7 @@ echo "Starting multi-GPU training at $(date)"
 echo ""
 
 accelerate launch \
-    --config_file training/configs/accelerate_single_node.yaml \
+    --config_file run_setup/configs/accelerate_single_node.yaml \
     train.py \
     --config configs/base_config.yaml
 
