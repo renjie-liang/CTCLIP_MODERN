@@ -178,8 +178,7 @@ class CTClipTrainer(nn.Module):
             self.max_epochs_config = training_cfg['max_epochs']
             self.max_steps = int(self.max_epochs_config * self.steps_per_epoch)
             self.print(f"Using epoch-based training: {self.max_epochs_config} epochs = {self.max_steps} steps")
-            if self.train_dataset.num_samples is not None:
-                self.print(f"  Dataset: {self.train_dataset.num_samples} samples / batch_size {self.batch_size} = {self.steps_per_epoch} steps/epoch")
+            self.print(f"  Dataset: {self.train_dataset.num_samples} samples / batch_size {self.batch_size} = {self.steps_per_epoch} steps/epoch")
 
         # Calculate warmup steps (prioritize warmup_steps over warmup_epochs)
         if training_cfg.get('warmup_steps') is not None:

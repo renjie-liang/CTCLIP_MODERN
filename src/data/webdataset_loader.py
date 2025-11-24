@@ -49,15 +49,36 @@ class CTReportWebDataset:
         self.mode = mode
 
         print(f"[{self.mode.upper()}] Initializing WebDataset from: {shard_pattern}")
-        print(f"[{self.mode.upper()}] Using PREPROCESSED data (fast loading, no CPU preprocessing)")
+        print(f"[{self.mode.upper()}] ⚡ Using PREPROCESSED data (fast loading, no CPU preprocessing)")
 
         # Verify shards exist
         shard_dir = Path(shard_pattern).parent
         if not shard_dir.exists():
             raise ValueError(f"Shard directory does not exist: {shard_dir}")
 
-        # WebDataset is an IterableDataset - no length needed
-        self.num_samples = None
+        # Load manifest if available
+        manifest_path = shard_dir / 'manifest.json'
+        if manifest_path.exists():
+            with open(manifest_path, 'r') as f:
+                self.manifest = json.load(f)
+            self.num_samples = self.manifest['total_samples']
+            print(f"[{self.mode.upper()}] Loaded manifest: {self.num_samples} samples")
+        else:
+            self.manifest = None
+            self.num_samples = None
+            print(f"[{self.mode.upper()}] Warning: No manifest.json found")
+
+    def __len__(self):
+        """
+        Return the number of samples in the dataset.
+
+        Note: WebDataset is an IterableDataset and doesn't naturally support len().
+        We provide this for compatibility with code that expects it.
+        """
+        if self.num_samples is not None:
+            return self.num_samples
+        else:
+            raise ValueError("Cannot determine dataset length: manifest.json not found")
 
     def _clean_text(self, text: str) -> str:
         """Clean report text by removing special characters."""
