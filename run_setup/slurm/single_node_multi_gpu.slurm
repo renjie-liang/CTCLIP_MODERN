@@ -4,8 +4,8 @@
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:2              # Use 2 GPUs (can change to 4/8 etc.)
 #SBATCH --nodes=1                 # Single node
-#SBATCH --cpus-per-task=32        # Recommended to increase CPUs to match GPU count
-#SBATCH --mem=400gb               # Recommended to increase memory to match GPU count
+#SBATCH --cpus-per-task=64        # Recommended to increase CPUs to match GPU count
+#SBATCH --mem=200gb               # Recommended to increase memory to match GPU count
 #SBATCH --time=72:00:00
 #SBATCH --account=xujie
 #SBATCH --qos=xujie
