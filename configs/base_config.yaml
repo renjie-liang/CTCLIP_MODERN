@@ -105,7 +105,7 @@ validation:
 
 # Checkpoint configuration
 checkpoint:
-  save_dir: "./saves"
+  save_dir: "./saves/baseline"
   keep_last_n: 3
   save_best: true
   best_metric: "auroc"
