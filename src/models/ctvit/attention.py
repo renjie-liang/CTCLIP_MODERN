@@ -18,20 +18,17 @@ from typing import Tuple, Optional
 
 from .layers import (
     exists, default, leaky_relu, l2norm,
-    LayerNorm, FeedForward, PEG
+    RMSNorm, SwiGLU, FeedForward, PEG
 )
-from flash_attn.flash_attn_interface import flash_attn_func
+from flash_attn.flash_attn_interface import (
+    flash_attn_varlen_qkvpacked_func
+)
+
+from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func
 
 class FlashAttentionQKV(nn.Module):
     """
-    FlashAttention replacement for the original Attention module.
-
-    Supports:
-        - multi-head QKV projection
-        - null key/value
-        - attn_bias (ContinuousPositionBias)
-        - mask
-        - causal (optional)
+    Clean FlashAttention v2 module for CT-ViT.
     """
 
     def __init__(
@@ -42,82 +39,85 @@ class FlashAttentionQKV(nn.Module):
         heads=8,
         causal=False,
         num_null_kv=0,
-        norm_context=True,
-        dropout=0.,
-        scale=8
+        dropout=0.
     ):
         super().__init__()
-
         self.heads = heads
         self.dim_head = dim_head
+        self.inner_dim = dim_head * heads
         self.causal = causal
         self.num_null_kv = num_null_kv
+        self.dropout = dropout
 
-        inner_dim = dim_head * heads
         dim_context = dim if dim_context is None else dim_context
 
-        self.norm = LayerNorm(dim)
-        self.context_norm = LayerNorm(dim_context) if norm_context else nn.Identity()
+        self.norm = nn.LayerNorm(dim)
+        self.context_norm = nn.LayerNorm(dim_context)
 
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        self.to_kv_ctx = nn.Linear(dim_context, inner_dim * 2, bias=False)
+        self.to_q = nn.Linear(dim, self.inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim_context, self.inner_dim * 2, bias=False)
 
-        # null kv (shared across batch)
-        self.null_kv = nn.Parameter(torch.randn(heads, 2 * num_null_kv, dim_head))
+        # null kv
+        self.null_kv = nn.Parameter(torch.randn(heads, num_null_kv, 2, dim_head))
 
-        self.to_out = nn.Linear(inner_dim, dim, bias=False)
+        self.to_out = nn.Linear(self.inner_dim, dim, bias=False)
 
-    def forward(self, x, mask=None, context=None, attn_bias=None):
-        """
-        x: (B, N, D)
-        context: (B, M, D)
-        attn_bias: (H, N, M) or (H, N, N)
-        """
+    def forward(self, x, mask=None, context=None):
+        b, n, device = x.shape[0], x.shape[1], x.device
 
-        b, n, d = x.shape
-        x_norm = self.norm(x)
+        if context is not None:
+            context = self.context_norm(context)
 
-        if context is None:
-            ctx = x_norm
-            qkv = self.to_qkv(x_norm)                      # (B, N, 3*HD)
-            q, k, v = qkv.chunk(3, dim=-1)
-        else:
-            ctx = self.context_norm(context)
-            q = self.to_qkv(x_norm)[..., :self.heads * self.dim_head]
-            kv_ctx = self.to_kv_ctx(ctx)
-            k, v = kv_ctx.chunk(2, dim=-1)
+        kv_input = context if context is not None else x
+        x = self.norm(x)
 
-        # reshape to (B, N, H, D)
-        def split_heads(t):
-            return t.reshape(b, -1, self.heads, self.dim_head)
+        # project
+        q = self.to_q(x)
+        k, v = self.to_kv(kv_input).chunk(2, dim=-1)
 
-        q = split_heads(q)
-        k = split_heads(k)
-        v = split_heads(v)
+        # reshape: (b, n, h*d) -> (b, n, h, d)
+        q = q.view(b, -1, self.heads, self.dim_head)
+        k = k.view(b, -1, self.heads, self.dim_head)
+        v = v.view(b, -1, self.heads, self.dim_head)
 
-        # append null kv
+        # add null kv if exists
         if self.num_null_kv > 0:
-            nk, nv = self.null_kv.chunk(2, dim=1)   # (H, nk, d)
-            nk = nk.unsqueeze(0).expand(b, -1, -1, -1)
-            nv = nv.unsqueeze(0).expand(b, -1, -1, -1)
-            k = torch.cat([nk, k], dim=2)
-            v = torch.cat([nv, v], dim=2)
+            nk = self.null_kv[:, :, 0, :]  # (H, N, D)
+            nv = self.null_kv[:, :, 1, :]
 
-        # flash attention expects (B, S, H, D)
-        q = q
-        k = k
-        v = v
+            # Reshape to (B, num_null, H, D) for concatenation
+            nk = nk.permute(1, 0, 2).unsqueeze(0).expand(b, -1, -1, -1)  # (B, N, H, D)
+            nv = nv.permute(1, 0, 2).unsqueeze(0).expand(b, -1, -1, -1)
 
-        # FlashAttention
-        out = flash_attn_func(
-            q, k, v,
-            dropout_p=0.0,
-            softmax_scale=None,
-            causal=self.causal
-        )  # (B, N, H, D)
+            k = torch.cat((nk, k), dim=1)  # concat on sequence dim
+            v = torch.cat((nv, v), dim=1)
 
-        out = out.reshape(b, n, -1)
-        return self.to_out(out)
+        # For flash_attn_qkvpacked_func, q/k/v must have same sequence length
+        # When using null_kv, we need to use the unpacked version instead
+        if self.num_null_kv > 0:
+            # Use unpacked version for different q/kv lengths
+            from flash_attn import flash_attn_func
+            out = flash_attn_func(
+                q.half(),
+                k.half(),
+                v.half(),
+                dropout_p=self.dropout if self.training else 0.0,
+                causal=self.causal
+            )
+        else:
+            # pack to qkv for flash-attn: (b, seqlen, 3, h, d)
+            qkv = torch.stack([q, k, v], dim=2)
+
+            out = flash_attn_qkvpacked_func(
+                qkv.half(),
+                dropout_p=self.dropout if self.training else 0.0,
+                causal=self.causal
+            )
+
+        # reshape back
+        out = out.view(b, -1, self.inner_dim)
+        return self.to_out(out.to(x.dtype))
+
 
 # ============================================================================
 # Attention (多头自注意力)
@@ -135,7 +135,7 @@ class Attention(nn.Module):
     5. 支持Causal Attention: 用于自回归生成
 
     计算流程:
-        1. LayerNorm(x) -> Q, K, V
+        1. RMSNorm(x) -> Q, K, V
         2. L2 Normalize Q, K
         3. Attention = softmax(Q @ K^T * scale) @ V
         4. Linear projection
@@ -197,8 +197,8 @@ class Attention(nn.Module):
         self.attn_dropout = nn.Dropout(dropout)
 
         # Normalization layers
-        self.norm = LayerNorm(dim)
-        self.context_norm = LayerNorm(dim_context) if norm_context else nn.Identity()
+        self.norm = RMSNorm(dim)
+        self.context_norm = RMSNorm(dim_context) if norm_context else nn.Identity()
 
         # Null Key-Value pairs (额外的可学习KV，增强表达能力)
         self.num_null_kv = num_null_kv
@@ -252,12 +252,17 @@ class Attention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
 
         # 添加Null Key-Value pairs
-        # 从 (H, 2*num_null_kv, D) split成 (H, num_null_kv, D) 两份
-        nk, nv = repeat(self.null_kv, 'h (n r) d -> b h n r d', b=batch, r=2).unbind(dim=-2)
 
-        # 拼接到K, V的前面
-        k = torch.cat((nk, k), dim=-2)  # (B, H, num_null_kv+N, D)
-        v = torch.cat((nv, v), dim=-2)
+        if self.num_null_kv > 0:
+            null = self.null_kv
+            null = null.view(self.heads, self.num_null_kv, 2, self.dim_head)
+            null = null.unsqueeze(0).expand(batch, -1, -1, -1, -1)
+
+            nk = null[..., 0, :]
+            nv = null[..., 1, :]
+
+            k = torch.cat((nk, k), dim=-2)
+            v = torch.cat((nv, v), dim=-2)
 
         # QK Normalization (提升训练稳定性)
         q, k = map(l2norm, (q, k))
@@ -270,10 +275,10 @@ class Attention(nn.Module):
         i, j = sim.shape[-2:]
 
         # 添加位置编码偏置 (如果有)
-        if exists(attn_bias):
-            # 为null_kv部分padding 0
-            attn_bias = F.pad(attn_bias, (self.num_null_kv, 0), value=0.)
-            sim = sim + attn_bias
+        # if exists(attn_bias):
+        #     # 为null_kv部分padding 0
+        #     attn_bias = F.pad(attn_bias, (self.num_null_kv, 0), value=0.)
+        #     sim = sim + attn_bias
 
         # 应用attention mask (如果有)
         if exists(mask):
@@ -628,18 +633,21 @@ class Transformer(nn.Module):
             ]))
 
         # 输出归一化
-        self.norm_out = LayerNorm(dim)
+        self.norm_out = RMSNorm(dim)
+
 
     @beartype
     def forward(
         self,
         x,
         video_shape: Tuple[int, int, int, int] = None,
-        attn_bias=None,
         context=None,
         self_attn_mask=None,
-        cross_attn_context_mask=None
+        cross_attn_context_mask=None,
+        attn_bias=None
     ):
+
+
         """
         Args:
             x: 输入特征 (B, N, D)
@@ -659,11 +667,13 @@ class Transformer(nn.Module):
                 x = peg(x, shape=video_shape) + x
 
             # 2. Self-Attention + Residual
-            x = self_attn(x, attn_bias=attn_bias, mask=self_attn_mask) + x
+            x = self_attn(x, mask=self_attn_mask) + x
+
 
             # 3. Cross-Attention + Residual (如果有)
             if exists(cross_attn) and exists(context):
                 x = cross_attn(x, context=context, mask=cross_attn_context_mask) + x
+
 
             # 4. FeedForward + Residual
             x = ff(x) + x
