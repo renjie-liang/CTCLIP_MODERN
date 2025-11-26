@@ -105,10 +105,18 @@ def load_checkpoint(model, checkpoint_path: str, device: torch.device):
     """Load model weights from checkpoint"""
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    if 'model' in checkpoint:
-        model.load_state_dict(checkpoint['model'])
+    # Support multiple checkpoint formats
+    if 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    elif 'model' in checkpoint:
+        state_dict = checkpoint['model']
+    elif 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
     else:
-        model.load_state_dict(checkpoint)
+        # Assume checkpoint is the state_dict itself
+        state_dict = checkpoint
+
+    model.load_state_dict(state_dict)
 
     print(f"Loaded checkpoint from {checkpoint_path}")
     if 'epoch' in checkpoint:
