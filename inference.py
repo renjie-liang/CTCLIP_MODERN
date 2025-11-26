@@ -103,7 +103,7 @@ def build_model(config: dict, device: torch.device):
 
 def load_checkpoint(model, checkpoint_path: str, device: torch.device):
     """Load model weights from checkpoint"""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     if 'model' in checkpoint:
         model.load_state_dict(checkpoint['model'])
