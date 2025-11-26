@@ -1,11 +1,11 @@
 """
-CTViT Attention Modules
+CTViT 注意力模块 (Attention Modules)
 
-Contains:
-- Attention (Multi-Head Self-Attention)
-- AlibiPositionalBias (ALiBi Positional Bias)
-- ContinuousPositionBias (Continuous Position Bias)
-- Transformer (Complete Transformer Block)
+包含：
+- Attention (多头自注意力)
+- AlibiPositionalBias (ALiBi位置偏置)
+- ContinuousPositionBias (连续位置偏置)
+- Transformer (完整Transformer块)
 """
 
 import math
@@ -18,60 +18,157 @@ from typing import Tuple, Optional
 
 from .layers import (
     exists, default, leaky_relu, l2norm,
-    LayerNorm, FeedForward, PEG
+    LayerNorm, RMSNorm, GEGLU, SwiGLU, FeedForward, PEG
 )
+from flash_attn.flash_attn_interface import (
+    flash_attn_varlen_qkvpacked_func
+)
+
+from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func
+
+class FlashAttentionQKV(nn.Module):
+    """
+    Clean FlashAttention v2 module for CT-ViT.
+    """
+
+    def __init__(
+        self,
+        dim,
+        dim_context=None,
+        dim_head=64,
+        heads=8,
+        causal=False,
+        num_null_kv=0,
+        dropout=0.
+    ):
+        super().__init__()
+        self.heads = heads
+        self.dim_head = dim_head
+        self.inner_dim = dim_head * heads
+        self.causal = causal
+        self.num_null_kv = num_null_kv
+        self.dropout = dropout
+
+        dim_context = dim if dim_context is None else dim_context
+
+        self.norm = nn.LayerNorm(dim)
+        self.context_norm = nn.LayerNorm(dim_context)
+
+        self.to_q = nn.Linear(dim, self.inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim_context, self.inner_dim * 2, bias=False)
+
+        # null kv
+        self.null_kv = nn.Parameter(torch.randn(heads, num_null_kv, 2, dim_head))
+
+        self.to_out = nn.Linear(self.inner_dim, dim, bias=False)
+
+    def forward(self, x, mask=None, context=None):
+        b, n, device = x.shape[0], x.shape[1], x.device
+
+        if context is not None:
+            context = self.context_norm(context)
+
+        kv_input = context if context is not None else x
+        x = self.norm(x)
+
+        # project
+        q = self.to_q(x)
+        k, v = self.to_kv(kv_input).chunk(2, dim=-1)
+
+        # reshape: (b, n, h*d) -> (b, n, h, d)
+        q = q.view(b, -1, self.heads, self.dim_head)
+        k = k.view(b, -1, self.heads, self.dim_head)
+        v = v.view(b, -1, self.heads, self.dim_head)
+
+        # add null kv if exists
+        if self.num_null_kv > 0:
+            nk = self.null_kv[:, :, 0, :]  # (H, N, D)
+            nv = self.null_kv[:, :, 1, :]
+
+            # Reshape to (B, num_null, H, D) for concatenation
+            nk = nk.permute(1, 0, 2).unsqueeze(0).expand(b, -1, -1, -1)  # (B, N, H, D)
+            nv = nv.permute(1, 0, 2).unsqueeze(0).expand(b, -1, -1, -1)
+
+            k = torch.cat((nk, k), dim=1)  # concat on sequence dim
+            v = torch.cat((nv, v), dim=1)
+
+        # For flash_attn_qkvpacked_func, q/k/v must have same sequence length
+        # When using null_kv, we need to use the unpacked version instead
+        if self.num_null_kv > 0:
+            # Use unpacked version for different q/kv lengths
+            from flash_attn import flash_attn_func
+            out = flash_attn_func(
+                q.half(),
+                k.half(),
+                v.half(),
+                dropout_p=self.dropout if self.training else 0.0,
+                causal=self.causal
+            )
+        else:
+            # pack to qkv for flash-attn: (b, seqlen, 3, h, d)
+            qkv = torch.stack([q, k, v], dim=2)
+
+            out = flash_attn_qkvpacked_func(
+                qkv.half(),
+                dropout_p=self.dropout if self.training else 0.0,
+                causal=self.causal
+            )
+
+        # reshape back
+        out = out.view(b, -1, self.inner_dim)
+        return self.to_out(out.to(x.dtype))
 
 
 # ============================================================================
-# Attention (Multi-Head Self-Attention)
+# Attention (多头自注意力)
 # ============================================================================
 
 class Attention(nn.Module):
     """
-    Multi-Head Self-Attention Mechanism
+    Multi-Head Self-Attention (多头自注意力机制)
 
-    Features:
-    1. QK Normalization: L2 normalization for Q and K vectors, improving training stability
-    2. Learnable Scale: Learnable scaling parameters for Q and K
-    3. Null Key-Value: Additional learnable KV pairs to enhance expressiveness
-    4. Cross-Attention Support: Can accept external context
-    5. Causal Attention Support: For autoregressive generation
+    特点：
+    1. QK Normalization: Q和K向量进行L2归一化，提升训练稳定性
+    2. Learnable Scale: 为Q和K添加可学习的缩放参数
+    3. Null Key-Value: 额外的可学习KV对，增强表达能力
+    4. 支持Cross-Attention: 可接受外部context
+    5. 支持Causal Attention: 用于自回归生成
 
-    Computation Flow:
-        1. LayerNorm(x) -> Q, K, V
+    计算流程:
+        1. RMSNorm(x) -> Q, K, V
         2. L2 Normalize Q, K
         3. Attention = softmax(Q @ K^T * scale) @ V
         4. Linear projection
 
     Args:
-        dim: Input feature dimension
-        dim_context: Context dimension (for cross-attention)
-        dim_head: Dimension per attention head (default 64)
-        heads: Number of attention heads (default 8)
-        causal: Whether to use causal attention (default False)
-        num_null_kv: Number of null key-value pairs (default 0)
-        norm_context: Whether to normalize context (default True)
-        dropout: Dropout ratio (default 0)
-        scale: Attention scale factor (default 8)
+        dim: 输入特征维度
+        dim_context: Context维度 (用于cross-attention)
+        dim_head: 每个注意力头的维度 (默认64)
+        heads: 注意力头数 (默认8)
+        causal: 是否使用因果注意力 (默认False)
+        num_null_kv: Null key-value对的数量 (默认0)
+        norm_context: 是否对context进行归一化 (默认True)
+        dropout: Dropout比率 (默认0)
+        scale: 注意力缩放因子 (默认8)
 
-    Modernization Opportunities:
+    🔧 [现代化改造点] 可以升级为：
     1. Flash Attention 2.0:
-       - Uses fused CUDA kernels, significantly reducing memory access
-       - 2-4x speedup, supports longer sequences
-       - Implementation: Replace einsum + softmax with flash_attn_func()
+       - 使用融合CUDA kernel，大幅减少内存访问
+       - 加速2-4倍，支持更长序列
+       - 实现: 替换 einsum + softmax 为 flash_attn_func()
 
     2. Grouped-Query Attention (GQA):
-       - Multiple Query heads share one set of KV heads
-       - Reduces KV cache, accelerates inference
-       - Example: 8 Q heads, 2 KV heads (4:1 ratio)
+       - 多个Query head共享一组KV head
+       - 减少KV cache，加速推理
+       - 例如: 8个Q head, 2个KV head (4:1比例)
 
     3. Multi-Query Attention (MQA):
-       - All Query heads share 1 set of KV
-       - Maximizes inference speed
+       - 所有Query head共享1组KV
+       - 最大化推理速度
 
     4. Sliding Window Attention:
-       - Only attends to local windows, reducing computational complexity
-       - Suitable for very long sequences
+       - 只关注局部窗口，减少计算复杂度
+       - 适合超长序列
     """
 
     def __init__(
@@ -93,17 +190,17 @@ class Attention(nn.Module):
         inner_dim = dim_head * heads
         dim_context = default(dim_context, dim)
 
-        # If causal attention, use ALiBi positional bias
+        # 如果是因果注意力，使用ALiBi位置偏置
         if causal:
             self.rel_pos_bias = AlibiPositionalBias(heads=heads)
 
         self.attn_dropout = nn.Dropout(dropout)
 
         # Normalization layers
-        self.norm = LayerNorm(dim)
-        self.context_norm = LayerNorm(dim_context) if norm_context else nn.Identity()
+        self.norm = RMSNorm(dim)
+        self.context_norm = RMSNorm(dim_context) if norm_context else nn.Identity()
 
-        # Null Key-Value pairs (additional learnable KV to enhance expressiveness)
+        # Null Key-Value pairs (额外的可学习KV，增强表达能力)
         self.num_null_kv = num_null_kv
         self.null_kv = nn.Parameter(torch.randn(heads, 2 * num_null_kv, dim_head))
 
@@ -111,8 +208,8 @@ class Attention(nn.Module):
         self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.to_kv = nn.Linear(dim_context, inner_dim * 2, bias=False)
 
-        # Learnable scaling parameters for QK Normalization
-        # Improves training stability, prevents softmax saturation
+        # QK Normalization的可学习缩放参数
+        # 提升训练稳定性，防止softmax饱和
         self.q_scale = nn.Parameter(torch.ones(dim_head))
         self.k_scale = nn.Parameter(torch.ones(dim_head))
 
@@ -128,152 +225,157 @@ class Attention(nn.Module):
     ):
         """
         Args:
-            x: Input features (B, N, D)
-            mask: Attention mask (B, N) - True means keep, False means mask out
-            context: External context for cross-attention (B, M, D_ctx)
-            attn_bias: Additional attention bias (H, N, N) such as positional encoding
+            x: 输入特征 (B, N, D)
+            mask: 注意力mask (B, N) - True表示保留，False表示mask掉
+            context: 外部context用于cross-attention (B, M, D_ctx)
+            attn_bias: 额外的注意力偏置 (H, N, N) 如位置编码
 
         Returns:
-            Output features (B, N, D)
+            输出特征 (B, N, D)
         """
         batch, device, dtype = x.shape[0], x.device, x.dtype
 
-        # Normalize context (if exists)
+        # Normalize context (如果有)
         if exists(context):
             context = self.context_norm(context)
 
-        # Choose KV source: context (cross-attn) or x (self-attn)
+        # 选择KV来源: context (cross-attn) 或 x (self-attn)
         kv_input = default(context, x)
 
         # Normalize input
         x = self.norm(x)
 
-        # Compute Q, K, V
+        # 计算 Q, K, V
         q, k, v = self.to_q(x), *self.to_kv(kv_input).chunk(2, dim=-1)
 
-        # Reshape to multi-head: (B, N, H*D) -> (B, H, N, D)
+        # Reshape为多头: (B, N, H*D) -> (B, H, N, D)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), (q, k, v))
 
-        # Add Null Key-Value pairs
-        # Split (H, 2*num_null_kv, D) into two (H, num_null_kv, D) parts
-        nk, nv = repeat(self.null_kv, 'h (n r) d -> b h n r d', b=batch, r=2).unbind(dim=-2)
+        # 添加Null Key-Value pairs
 
-        # Concatenate to the front of K, V
-        k = torch.cat((nk, k), dim=-2)  # (B, H, num_null_kv+N, D)
-        v = torch.cat((nv, v), dim=-2)
+        if self.num_null_kv > 0:
+            null = self.null_kv
+            null = null.view(self.heads, self.num_null_kv, 2, self.dim_head)
+            null = null.unsqueeze(0).expand(batch, -1, -1, -1, -1)
 
-        # QK Normalization (improves training stability)
+            nk = null[..., 0, :]
+            nv = null[..., 1, :]
+
+            k = torch.cat((nk, k), dim=-2)
+            v = torch.cat((nv, v), dim=-2)
+
+        # QK Normalization (提升训练稳定性)
         q, k = map(l2norm, (q, k))
-        q = q * self.q_scale  # Learnable scaling
+        q = q * self.q_scale  # 可学习缩放
         k = k * self.k_scale
 
-        # Compute attention scores: Q @ K^T
+        # 计算注意力分数: Q @ K^T
         sim = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
         i, j = sim.shape[-2:]
 
-        # Add positional encoding bias (if exists)
-        if exists(attn_bias):
-            # Pad null_kv part with 0
-            attn_bias = F.pad(attn_bias, (self.num_null_kv, 0), value=0.)
-            sim = sim + attn_bias
+        # 添加位置编码偏置 (如果有)
+        # if exists(attn_bias):
+        #     # 为null_kv部分padding 0
+        #     attn_bias = F.pad(attn_bias, (self.num_null_kv, 0), value=0.)
+        #     sim = sim + attn_bias
 
-        # Apply attention mask (if exists)
+        # 应用attention mask (如果有)
         if exists(mask):
-            # Pad null_kv part with True (don't mask)
+            # 为null_kv部分padding True (不mask)
             mask = F.pad(mask, (self.num_null_kv, 0), value=True)
             mask = rearrange(mask, 'b j -> b 1 1 j')
-            # Fill masked positions with -inf, becomes 0 after softmax
+            # mask掉的位置填充为-inf，softmax后变成0
             sim = sim.masked_fill(~mask, -torch.finfo(sim.dtype).max)
 
-        # Causal attention mask (if needed)
+        # 因果注意力mask (如果需要)
         if self.causal:
-            # Add ALiBi positional bias
+            # 添加ALiBi位置偏置
             sim = sim + self.rel_pos_bias(sim)
-            # Create upper triangular mask (can only see past and current)
+            # 创建上三角mask (只能看到过去和当前)
             causal_mask = torch.ones((i, j), device=device, dtype=torch.bool).triu(j - i + 1)
             sim = sim.masked_fill(causal_mask, -torch.finfo(sim.dtype).max)
 
-        # Softmax to compute attention weights
+        # Softmax计算注意力权重
         attn = sim.softmax(dim=-1)
         attn = self.attn_dropout(attn)
 
-        # Apply attention weights to V: Attention @ V
+        # 应用注意力权重到V: Attention @ V
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
 
-        # Merge multi-head: (B, H, N, D) -> (B, N, H*D)
+        # 合并多头: (B, H, N, D) -> (B, N, H*D)
         out = rearrange(out, 'b h n d -> b n (h d)')
 
-        # Output projection
+        # 输出投影
         return self.to_out(out)
 
 
 # ============================================================================
-# ALiBi Positional Bias
+# ALiBi Positional Bias (ALiBi位置偏置)
 # ============================================================================
 
 class AlibiPositionalBias(nn.Module):
     """
-    ALiBi (Attention with Linear Biases) Positional Bias
+    ALiBi (Attention with Linear Biases) 位置偏置
 
-    Paper: Train Short, Test Long: Attention with Linear Biases Enables
-           Input Length Extrapolation
+    论文: Train Short, Test Long: Attention with Linear Biases Enables
+          Input Length Extrapolation
 
-    Principle:
-        - Instead of using position encoding, adds linear bias to attention scores
-        - Bias increases linearly with distance, penalizing distant positions more
-        - Each attention head uses a different slope
+    原理:
+        - 不使用位置编码，而是在attention score上添加线性偏置
+        - 偏置随距离线性增长，距离越远惩罚越大
+        - 每个注意力头使用不同的斜率 (slope)
 
-    Advantages:
-        1. Strong extrapolation: Train on short sequences, can handle longer sequences at inference
-        2. Simple and efficient: No complex positional encoding needed
-        3. No additional parameters required
+    优点:
+        1. 外推能力强：训练短序列，推理时可以处理更长序列
+        2. 简单高效：不需要复杂的位置编码
+        3. 无需额外参数
 
-    Formula:
+    公式:
         bias[i, j] = -slope * |i - j|
-        where slope is different for each head, decreasing by powers of 2
+        其中slope对每个头不同，按2的幂次递减
 
     Args:
-        heads: Number of attention heads
+        heads: 注意力头数
 
-    Modernization Opportunities - Alternative Approaches:
+    🔧 [现代化改造点] 相关替代方案：
     1. RoPE (Rotary Position Embedding):
-       - Encodes positional information through rotary transformations
-       - Also has good extrapolation capability
-       - Adopted by models like LLaMA
+       - 通过旋转变换编码位置信息
+       - 外推能力也很好
+       - 被LLaMA等模型采用
 
     2. xPos (Extrapolatable Position Embedding):
-       - Improved version of ALiBi
-       - Better extrapolation performance
+       - ALiBi的改进版
+       - 更好的外推性能
     """
 
     def __init__(self, heads):
         super().__init__()
         self.heads = heads
-        # Compute slopes for each head
+        # 计算每个头的slope
         slopes = torch.Tensor(self._get_slopes(heads))
         slopes = rearrange(slopes, 'h -> h 1 1')
-        # Register as buffer (not trainable, but saved/loaded with model)
+        # 注册为buffer (不参与训练，但会随模型保存/加载)
         self.register_buffer('slopes', slopes, persistent=False)
         self.register_buffer('bias', None, persistent=False)
 
     def get_bias(self, i, j, device):
         """
-        Generate positional bias matrix
+        生成位置偏置矩阵
 
         Args:
-            i: Query sequence length
-            j: Key sequence length
-            device: Device
+            i: query序列长度
+            j: key序列长度
+            device: 设备
 
         Returns:
-            bias: (1, i, j) - Positional bias matrix
+            bias: (1, i, j) - 位置偏置矩阵
         """
-        # Generate position indices
+        # 生成position indices
         i_arange = torch.arange(j - i, j, device=device)  # query positions
         j_arange = torch.arange(j, device=device)          # key positions
 
-        # Compute distance matrix: |i - j|
+        # 计算距离矩阵: |i - j|
         bias = -torch.abs(
             rearrange(j_arange, 'j -> 1 1 j') -
             rearrange(i_arange, 'i -> 1 i 1')
@@ -283,21 +385,21 @@ class AlibiPositionalBias(nn.Module):
     @staticmethod
     def _get_slopes(heads):
         """
-        Compute slopes for each attention head
+        计算每个注意力头的slope
 
-        Strategy: Decrease by powers of 2
-            - If heads=8: slopes = [2^-1, 2^-2, ..., 2^-8]
+        策略: 按2的幂次递减
+            - 如果heads=8: slopes = [2^-1, 2^-2, ..., 2^-8]
         """
         def get_slopes_power_of_2(n):
             start = (2**(-2**-(math.log2(n)-3)))
             ratio = start
             return [start*ratio**i for i in range(n)]
 
-        # If heads is a power of 2
+        # 如果heads是2的幂
         if math.log2(heads).is_integer():
             return get_slopes_power_of_2(heads)
 
-        # If not, take the closest power of 2 and interpolate
+        # 如果不是，取最接近的2的幂，然后插值
         closest_power_of_2 = 2 ** math.floor(math.log2(heads))
         return (get_slopes_power_of_2(closest_power_of_2) +
                 get_slopes_power_of_2(2 * closest_power_of_2)[0::2][:heads-closest_power_of_2])
@@ -305,65 +407,65 @@ class AlibiPositionalBias(nn.Module):
     def forward(self, sim):
         """
         Args:
-            sim: Attention scores (B, H, i, j)
+            sim: 注意力分数 (B, H, i, j)
 
         Returns:
-            ALiBi bias (H, i, j)
+            ALiBi偏置 (H, i, j)
         """
         h, i, j, device = *sim.shape[-3:], sim.device
 
-        # If already cached and size is sufficient, use directly
+        # 如果已缓存且尺寸足够大，直接使用
         if exists(self.bias) and self.bias.shape[-1] >= j:
             return self.bias[..., :i, :j]
 
-        # Generate bias
+        # 生成bias
         bias = self.get_bias(i, j, device)
-        # Multiply by each head's slope
+        # 乘以每个头的slope
         bias = bias * self.slopes
 
-        # If number of heads is greater than computed bias heads, pad with 0
+        # 如果heads数量大于已计算的bias头数，padding 0
         num_heads_unalibied = h - bias.shape[0]
         bias = F.pad(bias, (0, 0, 0, 0, 0, num_heads_unalibied))
 
-        # Cache it
+        # 缓存起来
         self.register_buffer('bias', bias, persistent=False)
 
         return self.bias
 
 
 # ============================================================================
-# Continuous Position Bias
+# Continuous Position Bias (连续位置偏置)
 # ============================================================================
 
 class ContinuousPositionBias(nn.Module):
     """
-    Continuous Position Bias
+    Continuous Position Bias (连续位置偏置)
 
-    Paper: "Conditional Positional Encodings for Vision Transformers"
+    论文: "Conditional Positional Encodings for Vision Transformers"
 
-    Principle:
-        - Uses a small MLP to map relative position coordinates to attention bias
-        - Supports 2D (image) and 3D (video) position encoding
-        - Uses logarithmic distance encoding to enhance long-range modeling
+    原理:
+        - 使用小型MLP将相对位置坐标映射为注意力偏置
+        - 支持2D (图像) 和 3D (视频) 位置编码
+        - 使用对数距离编码，增强远距离建模
 
-    Architecture:
+    结构:
         Relative Position Coords
         → MLP (Linear + LeakyReLU) × layers
         → Linear(heads)
         → Attention Bias
 
     Args:
-        dim: MLP hidden dimension
-        heads: Number of attention heads
-        num_dims: Number of position dimensions (2=image, 3=video)
-        layers: Number of MLP layers
-        log_dist: Whether to use logarithmic distance (default True)
-        cache_rel_pos: Whether to cache relative positions (default False)
+        dim: MLP隐藏维度
+        heads: 注意力头数
+        num_dims: 位置维度数 (2=图像, 3=视频)
+        layers: MLP层数
+        log_dist: 是否使用对数距离 (默认True)
+        cache_rel_pos: 是否缓存相对位置 (默认False)
 
-    Modernization Opportunities - Alternative Approaches:
-    1. 2D RoPE: Extend RoPE to 2D, applying rotation separately for H and W dimensions
-    2. Learnable 2D Sinusoidal: Make fixed sin/cos positional encoding learnable
-    3. Simplified MLP: Reduce number of layers or use lighter network
+    🔧 [现代化改造点] 相关替代方案：
+    1. 2D RoPE: 将RoPE扩展到2D，为H和W维度分别应用旋转
+    2. 可学习的2D Sinusoidal: 将固定sin/cos位置编码改为可学习
+    3. 简化MLP: 减少层数或使用更轻量的网络
     """
 
     def __init__(
@@ -380,16 +482,16 @@ class ContinuousPositionBias(nn.Module):
         self.num_dims = num_dims
         self.log_dist = log_dist
 
-        # Build MLP
+        # 构建MLP
         self.net = nn.ModuleList([])
-        # Input layer: map from position coordinates (num_dims) to hidden dimension
+        # 输入层: 从位置坐标(num_dims)映射到隐藏维度
         self.net.append(nn.Sequential(nn.Linear(self.num_dims, dim), leaky_relu()))
 
-        # Hidden layers
+        # 中间层
         for _ in range(layers - 1):
             self.net.append(nn.Sequential(nn.Linear(dim, dim), leaky_relu()))
 
-        # Output layer: map to each attention head
+        # 输出层: 映射到每个注意力头
         self.net.append(nn.Linear(dim, heads))
 
         self.cache_rel_pos = cache_rel_pos
@@ -398,93 +500,93 @@ class ContinuousPositionBias(nn.Module):
     def forward(self, *dimensions, device=torch.device('cpu')):
         """
         Args:
-            *dimensions: Sizes of each dimension, e.g., (H, W) or (T, H, W)
-            device: Device
+            *dimensions: 各维度大小，例如 (H, W) 或 (T, H, W)
+            device: 设备
 
         Returns:
-            Positional bias (H, i, j) where i=j=H*W or T*H*W
+            位置偏置 (H, i, j) 其中 i=j=H*W 或 T*H*W
         """
-        # If not cached or not using cache, recompute
+        # 如果未缓存或不使用缓存，重新计算
         if not exists(self.rel_pos) or not self.cache_rel_pos:
-            # Generate position indices for each dimension
-            # Example: H=3, W=4 -> positions = [range(3), range(4)]
+            # 生成各维度的position indices
+            # 例如: H=3, W=4 -> positions = [range(3), range(4)]
             positions = [torch.arange(d, device=device) for d in dimensions]
 
-            # Generate grid coordinates
+            # 生成网格坐标
             # grid.shape = (num_dims, *dimensions)
-            # Example: (2, 3, 4) -> [[0,0,0,0,1,1,1,1,2,2,2,2], [0,1,2,3,0,1,2,3,0,1,2,3]]
+            # 例如: (2, 3, 4) -> [[0,0,0,0,1,1,1,1,2,2,2,2], [0,1,2,3,0,1,2,3,0,1,2,3]]
             grid = torch.stack(torch.meshgrid(*positions, indexing='ij'))
             grid = rearrange(grid, 'c ... -> (...) c')  # (HW, num_dims)
 
-            # Compute relative positions: pos[i] - pos[j]
+            # 计算相对位置: pos[i] - pos[j]
             # rel_pos.shape = (i, j, num_dims)
             rel_pos = rearrange(grid, 'i c -> i 1 c') - rearrange(grid, 'j c -> 1 j c')
 
-            # Logarithmic distance encoding: sign(x) * log(|x| + 1)
-            # Reduces distinction for distant positions, focuses more on nearby positions
+            # 对数距离编码: sign(x) * log(|x| + 1)
+            # 让远距离的区分度降低，更关注近距离
             if self.log_dist:
                 rel_pos = torch.sign(rel_pos) * torch.log(rel_pos.abs() + 1)
 
-            # Cache
+            # 缓存
             self.register_buffer('rel_pos', rel_pos, persistent=False)
 
-        # Convert to float32 (for MLP computation)
+        # 转为float32 (MLP计算)
         rel_pos = self.rel_pos.to(torch.float32)
 
-        # Through MLP: (i, j, num_dims) -> (i, j, heads)
+        # 通过MLP: (i, j, num_dims) -> (i, j, heads)
         for layer in self.net:
             rel_pos = layer(rel_pos.float())
 
-        # Rearrange dimensions: (i, j, heads) -> (heads, i, j)
+        # 转换维度顺序: (i, j, heads) -> (heads, i, j)
         return rearrange(rel_pos, 'i j h -> h i j')
 
 
 # ============================================================================
-# Transformer (Complete Transformer Block)
+# Transformer (完整Transformer块)
 # ============================================================================
 
 class Transformer(nn.Module):
     """
-    Transformer Module (Multi-layer Stack)
+    Transformer模块 (多层堆叠)
 
-    Architecture (per layer):
+    结构 (每层):
         Input
-        → PEG (Position Encoding, optional)
+        → PEG (位置编码, 可选)
         → Self-Attention + Residual
-        → Cross-Attention + Residual (optional)
+        → Cross-Attention + Residual (可选)
         → FeedForward + Residual
         → Output
 
     Args:
-        dim: Feature dimension
-        depth: Number of Transformer layers
-        dim_context: Context dimension (for cross-attention)
-        causal: Whether to use causal attention
-        dim_head: Dimension per attention head
-        heads: Number of attention heads
-        ff_mult: FeedForward expansion multiplier
-        peg: Whether to use PEG position encoding
-        peg_causal: Whether PEG uses causal padding
-        attn_num_null_kv: Number of null key-value pairs
-        has_cross_attn: Whether to include cross-attention
-        attn_dropout: Attention dropout
+        dim: 特征维度
+        depth: Transformer层数
+        dim_context: Context维度 (用于cross-attention)
+        causal: 是否使用因果注意力
+        dim_head: 每个注意力头的维度
+        heads: 注意力头数
+        ff_mult: FeedForward扩展倍数
+        peg: 是否使用PEG位置编码
+        peg_causal: PEG是否使用因果padding
+        attn_num_null_kv: Null key-value对数量
+        has_cross_attn: 是否包含cross-attention
+        attn_dropout: 注意力dropout
         ff_dropout: FeedForward dropout
 
-    Modernization Opportunities - Architecture Optimization:
+    🔧 [现代化改造点] 整体架构优化：
     1. Pre-LN vs Post-LN:
-       - Current: Post-LN (LN inside Attention)
-       - Switch to Pre-LN: LN(x) + Attn(...) more stable
-       - Reference: GPT-3, LLaMA
+       - 当前: Post-LN (LN在Attention内部)
+       - 改为Pre-LN: LN(x) + Attn(...) 更稳定
+       - 参考: GPT-3, LLaMA
 
     2. Parallel Attention + FFN:
-       - Compute Attention and FFN in parallel then add
-       - 10-15% speedup, comparable performance
-       - Reference: PaLM
+       - 将Attention和FFN并行计算后相加
+       - 加速10-15%，性能相当
+       - 参考: PaLM
 
     3. MOE (Mixture of Experts):
-       - Replace FFN with mixture of experts
-       - Increase parameters while maintaining computation
-       - Reference: Switch Transformer
+       - 将FFN改为多个专家的混合
+       - 增加参数量但保持计算量
+       - 参考: Switch Transformer
     """
 
     def __init__(
@@ -502,74 +604,89 @@ class Transformer(nn.Module):
         attn_num_null_kv=2,
         has_cross_attn=False,
         attn_dropout=0.,
-        ff_dropout=0.
+        ff_dropout=0.,
+        # NEW: Optimization flags
+        use_flash_attention=False,
+        use_rms_norm=False,
+        use_swiglu=False
     ):
         super().__init__()
         self.layers = nn.ModuleList([])
 
-        # Stack depth layers
+        # Choose attention class based on optimization flag
+        attn_class = FlashAttentionQKV if use_flash_attention else Attention
+
+        # Choose normalization class based on optimization flag
+        norm_class = RMSNorm if use_rms_norm else LayerNorm
+
+        # 堆叠depth层
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                # 1. PEG (Position Encoding Generator, optional)
+                # 1. PEG (位置编码生成器, 可选)
                 PEG(dim=dim, causal=peg_causal) if peg else None,
 
                 # 2. Self-Attention
-                Attention(
+                attn_class(
                     dim=dim, dim_head=dim_head, heads=heads,
                     causal=causal, dropout=attn_dropout
                 ),
 
-                # 3. Cross-Attention (optional)
-                Attention(
+                # 3. Cross-Attention (可选)
+                attn_class(
                     dim=dim, dim_head=dim_head, dim_context=dim_context,
                     heads=heads, causal=False, num_null_kv=attn_num_null_kv,
                     dropout=attn_dropout
                 ) if has_cross_attn else None,
 
-                # 4. FeedForward
-                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)
+                # 4. FeedForward (with configurable activation)
+                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout, use_swiglu=use_swiglu)
             ]))
 
-        # Output normalization
-        self.norm_out = LayerNorm(dim)
+        # Output normalization (configurable)
+        self.norm_out = norm_class(dim)
+
 
     @beartype
     def forward(
         self,
         x,
         video_shape: Tuple[int, int, int, int] = None,
-        attn_bias=None,
         context=None,
         self_attn_mask=None,
-        cross_attn_context_mask=None
+        cross_attn_context_mask=None,
+        attn_bias=None
     ):
+
+
         """
         Args:
-            x: Input features (B, N, D)
-            video_shape: Shape for PEG (B, T, H, W)
-            attn_bias: Attention bias
-            context: Context for cross-attention
-            self_attn_mask: Mask for self-attention
-            cross_attn_context_mask: Mask for cross-attention
+            x: 输入特征 (B, N, D)
+            video_shape: 用于PEG的形状 (B, T, H, W)
+            attn_bias: 注意力偏置
+            context: Cross-attention的context
+            self_attn_mask: Self-attention的mask
+            cross_attn_context_mask: Cross-attention的mask
 
         Returns:
-            Output features (B, N, D)
+            输出特征 (B, N, D)
         """
-        # Iterate through each layer
+        # 遍历每一层
         for peg, self_attn, cross_attn, ff in self.layers:
-            # 1. Position encoding (if exists)
+            # 1. 位置编码 (如果有)
             if exists(peg):
                 x = peg(x, shape=video_shape) + x
 
             # 2. Self-Attention + Residual
-            x = self_attn(x, attn_bias=attn_bias, mask=self_attn_mask) + x
+            x = self_attn(x, mask=self_attn_mask) + x
 
-            # 3. Cross-Attention + Residual (if exists)
+
+            # 3. Cross-Attention + Residual (如果有)
             if exists(cross_attn) and exists(context):
                 x = cross_attn(x, context=context, mask=cross_attn_context_mask) + x
+
 
             # 4. FeedForward + Residual
             x = ff(x) + x
 
-        # Output normalization
+        # 输出归一化
         return self.norm_out(x)

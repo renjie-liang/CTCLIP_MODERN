@@ -51,6 +51,12 @@ model:
     temporal_depth: 4
     dim_head: 32
     heads: 8
+
+    # Optimization flags (for ablation studies)
+    use_flash_attention: false  # true = FlashAttention, false = baseline Attention
+    use_rms_norm: false         # true = RMSNorm, false = LayerNorm
+    use_swiglu: false           # true = SwiGLU, false = GEGLU
+
     profile_timing: false  # Enable detailed CTViT profiling (print timing for each component)
 
   # Text Encoder (BiomedBERT)

@@ -226,7 +226,7 @@ def main():
     )
 
     # Validation dataset
-    val_dataset = CTReportDataset(
+    val_dataset = CTReportWebDataset(
         data_folder=data_cfg['valid_dir'],
         reports_file=data_cfg['reports_valid'],
         meta_file=data_cfg['valid_meta'],

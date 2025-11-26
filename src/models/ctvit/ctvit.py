@@ -100,6 +100,10 @@ class CTViT(nn.Module):
         channels: int = 1,
         attn_dropout: float = 0.,
         ff_dropout: float = 0.,
+        # NEW: Optimization flags for ablation studies
+        use_flash_attention: bool = False,
+        use_rms_norm: bool = False,
+        use_swiglu: bool = False,
         profile_timing: bool = False
     ):
         """
@@ -166,6 +170,10 @@ class CTViT(nn.Module):
             ff_dropout=ff_dropout,
             peg=True,        # Use PEG position encoding
             peg_causal=True, # Use causal padding for temporal dimension
+            # Optimization flags
+            use_flash_attention=use_flash_attention,
+            use_rms_norm=use_rms_norm,
+            use_swiglu=use_swiglu,
         )
 
         # ===== Encoder =====
