@@ -3,9 +3,11 @@ CTViT 基础层组件 (Basic Layer Components)
 
 包含：
 - Helper functions (辅助函数)
-- RMSNorm (层归一化)
-- GEGLU activation (门控激活函数)
-- FeedForward (前馈网络)
+- LayerNorm (层归一化 - baseline)
+- RMSNorm (层归一化 - optimized)
+- GEGLU activation (门控激活函数 - baseline)
+- SwiGLU activation (门控激活函数 - optimized)
+- FeedForward (前馈网络 - configurable)
 - PEG (位置编码生成器)
 """
 
@@ -56,9 +58,41 @@ def l2norm(t):
     return F.normalize(t, dim=-1)
 
 
+# ============================================================================
+# Normalization Layers
+# ============================================================================
+
+class LayerNorm(nn.Module):
+    """
+    Bias-less LayerNorm (Layer Normalization without bias)
+
+    Features:
+    - Does not use bias parameter
+    - Follows design of modern models like T5, PaLM
+    - More stable training (baseline implementation)
+    """
+
+    def __init__(self, dim):
+        super().__init__()
+        # gamma: Learnable scaling parameter
+        self.gamma = nn.Parameter(torch.ones(dim))
+        # beta: Fixed bias at 0 (not learnable)
+        self.register_buffer("beta", torch.zeros(dim))
+
+    def forward(self, x):
+        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
 
 
 class RMSNorm(nn.Module):
+    """
+    RMSNorm (Root Mean Square Normalization)
+
+    Faster than LayerNorm - removes mean centering step.
+    Used in modern models like LLaMA, T5.
+
+    Performance: 5-10% speedup vs LayerNorm
+    """
+
     def __init__(self, dim, eps=1e-8):
         super().__init__()
         self.eps = eps
@@ -67,8 +101,23 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         rms = x.pow(2).mean(-1, keepdim=True).sqrt()
         return x * (self.weight / (rms + self.eps))
-    
+
+
+# ============================================================================
+# Activation Functions
+# ============================================================================
+
 class SwiGLU(nn.Module):
+    """
+    SwiGLU (Swish-Gated Linear Unit)
+
+    Used in modern models like LLaMA, PaLM.
+    Generally better performance than GEGLU.
+
+    Formula: SwiGLU(x) = Swish(x_gate) * x_value
+    where Swish(x) = x * sigmoid(x) = x * σ(x)
+    """
+
     def forward(self, x):
         a, b = x.chunk(2, dim=-1)
         return F.silu(a) * b
@@ -106,15 +155,35 @@ class GEGLU(nn.Module):
 # FeedForward Network (前馈网络)
 # ============================================================================
 
-def FeedForward(dim, mult=4, dropout=0.):
+def FeedForward(dim, mult=4, dropout=0., use_swiglu=False):
+    """
+    FeedForward Network
+
+    Architecture:
+        LayerNorm → Linear(expand) → Activation → Dropout → Linear(compress)
+
+    Args:
+        dim: Input/output dimension
+        mult: Hidden layer expansion multiplier (default 4x)
+        dropout: Dropout ratio
+        use_swiglu: Use SwiGLU instead of GEGLU (default False for baseline)
+
+    Inner dimension calculation:
+        inner_dim = dim * mult * (2/3)
+        - When mult=4, inner_dim ≈ 2.67 * dim
+        - Multiply by 2 because gated activations split into two halves
+    """
     inner_dim = int(mult * (2 / 3) * dim)
 
+    # Choose activation function
+    activation = SwiGLU() if use_swiglu else GEGLU()
+
     return nn.Sequential(
-        nn.LayerNorm(dim),
-        nn.Linear(dim, inner_dim * 2, bias=False),  # 扩展 ×2
-        SwiGLU(),                                    # 激活
-        nn.Dropout(dropout),
-        nn.Linear(inner_dim, dim, bias=False)        # 压缩
+        nn.LayerNorm(dim),                          # Normalization
+        nn.Linear(dim, inner_dim * 2, bias=False),  # Expand (×2 for gating)
+        activation,                                  # Gated activation
+        nn.Dropout(dropout),                        # Dropout
+        nn.Linear(inner_dim, dim, bias=False)       # Compress back
     )
 
 

@@ -18,7 +18,7 @@ from typing import Tuple, Optional
 
 from .layers import (
     exists, default, leaky_relu, l2norm,
-    RMSNorm, SwiGLU, FeedForward, PEG
+    LayerNorm, RMSNorm, GEGLU, SwiGLU, FeedForward, PEG
 )
 from flash_attn.flash_attn_interface import (
     flash_attn_varlen_qkvpacked_func
@@ -604,10 +604,20 @@ class Transformer(nn.Module):
         attn_num_null_kv=2,
         has_cross_attn=False,
         attn_dropout=0.,
-        ff_dropout=0.
+        ff_dropout=0.,
+        # NEW: Optimization flags
+        use_flash_attention=False,
+        use_rms_norm=False,
+        use_swiglu=False
     ):
         super().__init__()
         self.layers = nn.ModuleList([])
+
+        # Choose attention class based on optimization flag
+        attn_class = FlashAttentionQKV if use_flash_attention else Attention
+
+        # Choose normalization class based on optimization flag
+        norm_class = RMSNorm if use_rms_norm else LayerNorm
 
         # 堆叠depth层
         for _ in range(depth):
@@ -616,24 +626,24 @@ class Transformer(nn.Module):
                 PEG(dim=dim, causal=peg_causal) if peg else None,
 
                 # 2. Self-Attention
-                FlashAttentionQKV(
+                attn_class(
                     dim=dim, dim_head=dim_head, heads=heads,
                     causal=causal, dropout=attn_dropout
                 ),
 
                 # 3. Cross-Attention (可选)
-                FlashAttentionQKV(
+                attn_class(
                     dim=dim, dim_head=dim_head, dim_context=dim_context,
                     heads=heads, causal=False, num_null_kv=attn_num_null_kv,
                     dropout=attn_dropout
                 ) if has_cross_attn else None,
 
-                # 4. FeedForward
-                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout)
+                # 4. FeedForward (with configurable activation)
+                FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout, use_swiglu=use_swiglu)
             ]))
 
-        # 输出归一化
-        self.norm_out = RMSNorm(dim)
+        # Output normalization (configurable)
+        self.norm_out = norm_class(dim)
 
 
     @beartype
