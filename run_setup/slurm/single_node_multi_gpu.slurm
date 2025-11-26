@@ -2,11 +2,12 @@
 
 #SBATCH --job-name=ctclip_train_multi_gpu
 #SBATCH --partition=hpg-b200
-#SBATCH --gres=gpu:2              # Use 2 GPUs (can change to 4/8 etc.)
-#SBATCH --nodes=1                 # Single node
-#SBATCH --cpus-per-task=64        # Recommended to increase CPUs to match GPU count
-#SBATCH --mem=200gb               # Recommended to increase memory to match GPU count
-#SBATCH --time=72:00:00
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:2              # 2 GPUs
+#SBATCH --ntasks=1                # 一个任务，内部用 torchrun 启动 2 个进程
+#SBATCH --cpus-per-task=8         # 足够支撑 num_workers=2 的 DataLoader
+#SBATCH --mem=24G                 # 实测峰值 ~8G，留 2-3 倍余量
+#SBATCH --time=1:00:00
 #SBATCH --account=xujie
 #SBATCH --qos=xujie
 #SBATCH --output=out_slurm/train_multi_gpu_%j.out

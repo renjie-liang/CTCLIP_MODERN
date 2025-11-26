@@ -2,10 +2,11 @@
 
 #SBATCH --job-name=ctclip_resume_training
 #SBATCH --partition=hpg-b200
-#SBATCH --gres=gpu:2              # Use 2 GPUs (can change to 4/8 etc.)
-#SBATCH --nodes=1                 # Single node
-#SBATCH --cpus-per-task=64        # Recommended to increase CPUs to match GPU count
-#SBATCH --mem=200gb               # Recommended to increase memory to match GPU count
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:2              # 2 GPUs
+#SBATCH --ntasks=1                # 单个任务，由脚本内部用 torchrun 启动 2 个进程
+#SBATCH --cpus-per-task=8         # 给这个任务 8 个 CPU 够用（num_workers=2）
+#SBATCH --mem=24G                 # 峰值 ~8G，x2～3 留余量
 #SBATCH --time=72:00:00
 #SBATCH --account=xujie
 #SBATCH --qos=xujie
@@ -60,7 +61,7 @@ accelerate launch \
     --config_file run_setup/configs/accelerate_single_node.yaml \
     train.py \
     --config configs/base_config.yaml \
-    --resume saves/baseline/latest.pt
+    --resume saves/important/baseline/latest.pt
 
 # Capture exit code
 EXIT_CODE=$?
