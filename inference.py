@@ -77,7 +77,8 @@ def build_model(config: dict, device: torch.device):
     text_config = model_config['text_encoder']
     tokenizer = AutoTokenizer.from_pretrained(
         text_config['path'],
-        do_lower_case=text_config['do_lower_case']
+        do_lower_case=text_config['do_lower_case'],
+        trust_remote_code=True
     )
     text_encoder = AutoModel.from_pretrained(text_config['path'], trust_remote_code=True)
     text_encoder.resize_token_embeddings(len(tokenizer))
