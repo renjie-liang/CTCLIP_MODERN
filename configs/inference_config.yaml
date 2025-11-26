@@ -1,0 +1,49 @@
+_base_: base_config.yaml
+
+# Inference-specific configuration
+experiment:
+  name: "ctclip_inference"
+  seed: 2025
+
+# Use baseline model configuration (no optimizations by default)
+model:
+  image_encoder:
+    use_flash_attention: false
+    use_rms_norm: false
+    use_swiglu: false
+
+# Device configuration for inference
+device:
+  use_cuda: true
+  cuda_device: 0
+
+# Data configuration for validation set
+data:
+  # Batch size 1 for inference (can process one sample at a time)
+  batch_size: 1
+  num_workers: 8
+
+# Validation settings
+validation:
+  # Run full validation
+  eval_every_n_steps: null
+  eval_every_n_epochs: null
+
+  # Metrics to compute
+  metrics:
+    - "auroc"
+    - "auprc"
+    - "f1"
+    - "precision"
+    - "recall"
+
+  # Bootstrap settings
+  use_bootstrap: true
+  n_bootstrap: 1000
+  bootstrap_threshold: 0.5
+
+# Logging (minimal for inference)
+logging:
+  use_wandb: false
+  use_tensorboard: false
+  use_console: true

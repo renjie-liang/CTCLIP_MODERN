@@ -1,0 +1,19 @@
+_base_: ../base_config.yaml
+
+experiment:
+  name: "ctclip_ablation_flash_swiglu"
+
+model:
+  image_encoder:
+    # FlashAttention + SwiGLU (no RMSNorm)
+    use_flash_attention: true
+    use_rms_norm: false
+    use_swiglu: true
+
+checkpoint:
+  save_dir: "saves/ablation_flash_swiglu"
+
+logging:
+  wandb_project: "ctclip_ablation"
+  wandb_run_name: "flash_swiglu"
+  wandb_tags: ["ablation", "flash_attention", "swiglu"]

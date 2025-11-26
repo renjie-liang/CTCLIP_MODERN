@@ -1,0 +1,19 @@
+_base_: ../base_config.yaml
+
+experiment:
+  name: "ctclip_ablation_rms_only"
+
+model:
+  image_encoder:
+    # Only RMSNorm enabled
+    use_flash_attention: false
+    use_rms_norm: true
+    use_swiglu: false
+
+checkpoint:
+  save_dir: "saves/ablation_rms_only"
+
+logging:
+  wandb_project: "ctclip_ablation"
+  wandb_run_name: "rms_only"
+  wandb_tags: ["ablation", "rms_norm"]
