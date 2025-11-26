@@ -25,9 +25,12 @@ data:
 
 # Validation settings
 validation:
-  # Run full validation
-  eval_every_n_steps: null
+  # For inference, these are not used but required by config validation
+  eval_every_n_steps: 1
   eval_every_n_epochs: null
+
+  # Only run full validation once (not during training)
+  eval_samples: null  # null = use all validation samples
 
   # Metrics to compute
   metrics:
@@ -37,10 +40,10 @@ validation:
     - "precision"
     - "recall"
 
-  # Bootstrap settings
+  # Bootstrap settings for confidence intervals
   use_bootstrap: true
   n_bootstrap: 1000
-  bootstrap_threshold: 0.5
+  threshold: 0.5
 
 # Logging (minimal for inference)
 logging:

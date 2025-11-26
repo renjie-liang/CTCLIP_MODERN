@@ -20,9 +20,11 @@ from .layers import (
     exists, default, leaky_relu, l2norm,
     LayerNorm, RMSNorm, GEGLU, SwiGLU, FeedForward, PEG
 )
+from flash_attn.flash_attn_interface import (
+    flash_attn_varlen_qkvpacked_func
+)
 
-# FlashAttention imports are now lazy (imported only when needed)
-# This allows baseline code to run without flash_attn installed
+from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func
 
 class FlashAttentionQKV(nn.Module):
     """
@@ -61,17 +63,6 @@ class FlashAttentionQKV(nn.Module):
         self.to_out = nn.Linear(self.inner_dim, dim, bias=False)
 
     def forward(self, x, mask=None, context=None):
-        # Lazy import flash_attn (only when FlashAttentionQKV is actually used)
-        try:
-            from flash_attn import flash_attn_func
-            from flash_attn.flash_attn_interface import flash_attn_qkvpacked_func
-        except ImportError:
-            raise ImportError(
-                "flash_attn is not installed. Install it with: "
-                "pip install flash-attn --no-build-isolation\n"
-                "Or set use_flash_attention=false in your config to use baseline Attention."
-            )
-
         b, n, device = x.shape[0], x.shape[1], x.device
 
         if context is not None:
@@ -105,6 +96,7 @@ class FlashAttentionQKV(nn.Module):
         # When using null_kv, we need to use the unpacked version instead
         if self.num_null_kv > 0:
             # Use unpacked version for different q/kv lengths
+            from flash_attn import flash_attn_func
             out = flash_attn_func(
                 q.half(),
                 k.half(),
