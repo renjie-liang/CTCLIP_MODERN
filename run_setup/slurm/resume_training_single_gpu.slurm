@@ -1,17 +1,17 @@
 #!/bin/bash
 
-#SBATCH --job-name=ctclip_train_multi_gpu
+#SBATCH --job-name=ctclip_resume_training
 #SBATCH --partition=hpg-b200
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2              # 2 GPUs
-#SBATCH --ntasks=1                # 一个任务，内部用 torchrun 启动 2 个进程
-#SBATCH --cpus-per-task=32         # 足够支撑 num_workers=2 的 DataLoader
-#SBATCH --mem=24G                 # 实测峰值 ~8G，留 2-3 倍余量
-#SBATCH --time=1:00:00
+#SBATCH --gres=gpu:1              # 2 GPUs
+#SBATCH --ntasks=1                # 单个任务，由脚本内部用 torchrun 启动 2 个进程
+#SBATCH --cpus-per-task=32         # 给这个任务 8 个 CPU 够用（num_workers=2）
+#SBATCH --mem=100G                 # 峰值 ~8G，x2～3 留余量
+#SBATCH --time=2:00:00
 #SBATCH --account=xujie
 #SBATCH --qos=xujie
-#SBATCH --output=out_slurm/train_multi_gpu_%j.out
-#SBATCH --error=out_slurm/train_multi_gpu_%j.err
+#SBATCH --output=out_slurm/resume_training_%j.out
+#SBATCH --error=out_slurm/resume_training_%j.err
 
 # Create output directories
 mkdir -p out_slurm
@@ -47,16 +47,19 @@ echo "Python version: $(python --version)"
 echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
 echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 echo "Number of GPUs: $(python -c 'import torch; print(torch.cuda.device_count())')"
-
-
-# Start training with accelerate
-echo "Starting multi-GPU training at $(date)"
+echo "========================================"
+echo "Resume Information"
+echo "========================================"
+echo "Resuming from checkpoint: saves/baseline/latest.pt"
 echo ""
 
-accelerate launch \
-    --config_file run_setup/configs/accelerate_single_node.yaml \
-    train.py \
-    --config configs/base_config.yaml
+# Start training with accelerate - RESUME FROM CHECKPOINT
+echo "Starting resumed multi-GPU training at $(date)"
+echo ""
+
+python train.py \
+    --config configs/base_config.yaml \
+    --resume saves/important/baseline/latest.pt
 
 # Capture exit code
 EXIT_CODE=$?

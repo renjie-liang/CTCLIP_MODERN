@@ -198,7 +198,7 @@ class CheckpointManager:
         print(f"Loading checkpoint from: {checkpoint_path}")
 
         # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
         # Restore model
         model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
