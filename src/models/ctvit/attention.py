@@ -181,7 +181,8 @@ class Attention(nn.Module):
         num_null_kv=0,
         norm_context=True,
         dropout=0.,
-        scale=8
+        scale=8,
+        use_rms_norm=False
     ):
         super().__init__()
         self.heads = heads
@@ -196,9 +197,10 @@ class Attention(nn.Module):
 
         self.attn_dropout = nn.Dropout(dropout)
 
-        # Normalization layers
-        self.norm = RMSNorm(dim)
-        self.context_norm = RMSNorm(dim_context) if norm_context else nn.Identity()
+        # Normalization layers (configurable: LayerNorm for baseline, RMSNorm for optimized)
+        norm_class = RMSNorm if use_rms_norm else LayerNorm
+        self.norm = norm_class(dim)
+        self.context_norm = norm_class(dim_context) if norm_context else nn.Identity()
 
         # Null Key-Value pairs (额外的可学习KV，增强表达能力)
         self.num_null_kv = num_null_kv
@@ -621,22 +623,41 @@ class Transformer(nn.Module):
 
         # 堆叠depth层
         for _ in range(depth):
+            # Build attention layers with appropriate parameters
+            if use_flash_attention:
+                # FlashAttentionQKV doesn't need use_rms_norm (it has hardcoded LayerNorm)
+                self_attn = FlashAttentionQKV(
+                    dim=dim, dim_head=dim_head, heads=heads,
+                    causal=causal, dropout=attn_dropout
+                )
+                cross_attn = FlashAttentionQKV(
+                    dim=dim, dim_head=dim_head, dim_context=dim_context,
+                    heads=heads, causal=False, num_null_kv=attn_num_null_kv,
+                    dropout=attn_dropout
+                ) if has_cross_attn else None
+            else:
+                # Attention class needs use_rms_norm parameter
+                self_attn = Attention(
+                    dim=dim, dim_head=dim_head, heads=heads,
+                    causal=causal, dropout=attn_dropout,
+                    use_rms_norm=use_rms_norm
+                )
+                cross_attn = Attention(
+                    dim=dim, dim_head=dim_head, dim_context=dim_context,
+                    heads=heads, causal=False, num_null_kv=attn_num_null_kv,
+                    dropout=attn_dropout,
+                    use_rms_norm=use_rms_norm
+                ) if has_cross_attn else None
+
             self.layers.append(nn.ModuleList([
                 # 1. PEG (位置编码生成器, 可选)
                 PEG(dim=dim, causal=peg_causal) if peg else None,
 
                 # 2. Self-Attention
-                attn_class(
-                    dim=dim, dim_head=dim_head, heads=heads,
-                    causal=causal, dropout=attn_dropout
-                ),
+                self_attn,
 
                 # 3. Cross-Attention (可选)
-                attn_class(
-                    dim=dim, dim_head=dim_head, dim_context=dim_context,
-                    heads=heads, causal=False, num_null_kv=attn_num_null_kv,
-                    dropout=attn_dropout
-                ) if has_cross_attn else None,
+                cross_attn,
 
                 # 4. FeedForward (with configurable activation)
                 FeedForward(dim=dim, mult=ff_mult, dropout=ff_dropout, use_swiglu=use_swiglu)
