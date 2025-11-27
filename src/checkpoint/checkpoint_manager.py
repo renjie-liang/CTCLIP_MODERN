@@ -168,7 +168,7 @@ class CheckpointManager:
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[Any] = None,
         load_random_states: bool = True,
-        strict: bool = True
+        strict: bool = False  # Changed to False to support loading old checkpoints
     ) -> Dict[str, Any]:
         """
         Load checkpoint and restore training state
@@ -179,7 +179,7 @@ class CheckpointManager:
             optimizer: Optimizer (None=don't restore optimizer state)
             scheduler: Scheduler (None=don't restore scheduler state)
             load_random_states: Whether to restore random states
-            strict: Whether to strictly match model state dict
+            strict: Whether to strictly match model state dict (False=allow partial loading)
 
         Returns:
             Checkpoint dictionary containing epoch, global_step, metrics, etc.
@@ -197,8 +197,8 @@ class CheckpointManager:
 
         print(f"Loading checkpoint from: {checkpoint_path}")
 
-        # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        # Load checkpoint (PyTorch 2.6 compatibility)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
         # Restore model
         model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
