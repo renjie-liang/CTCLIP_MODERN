@@ -116,7 +116,8 @@ def load_checkpoint(model, checkpoint_path: str, device: torch.device):
         # Assume checkpoint is the state_dict itself
         state_dict = checkpoint
 
-    model.load_state_dict(state_dict)
+    # Load with strict=False to support old checkpoints (before optimization params)
+    model.load_state_dict(state_dict, strict=False)
 
     print(f"Loaded checkpoint from {checkpoint_path}")
     if 'epoch' in checkpoint:
