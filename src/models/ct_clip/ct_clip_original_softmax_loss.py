@@ -563,17 +563,12 @@ class CTCLIP(nn.Module):
         else:
             self.to_visual_latent = nn.Linear(dim_image, dim_latent, bias = False)
 
-        # temperature (stored in log-space, following SigLIP style)
-        # temp = exp(self.temperature); initialize temp ≈ 10
-        self.temperature = nn.Parameter(torch.tensor(math.log(10.0)))
+        # temperature
 
-        # learnable logit bias for SigLIP-style loss
-        # initialized to -10 as in SigLIP, to avoid early domination by negatives
-        self.logit_bias = nn.Parameter(torch.tensor(-10.0))
+        self.temperature = nn.Parameter(torch.tensor(1.))
 
         # from https://arxiv.org/abs/2111.07783 (FILIP paper)
         self.use_all_token_embeds = use_all_token_embeds
-
 
         # proposed in https://arxiv.org/abs/2110.06848 (DCL) and https://arxiv.org/abs/2110.11316 (CLOOB)
         self.decoupled_contrastive_learning = decoupled_contrastive_learning
@@ -783,54 +778,80 @@ class CTCLIP(nn.Module):
             einsum_args = (text_latents_extra, image_latents_extra) if self.extra_latent_projection and not text_to_image else (text_latents, image_latents)
             return einsum('b d, b d -> b', *einsum_args) * temp
 
-        # get temperature
+        # split out multiview dimension for text and images
 
-        temp = self.temperature.exp()
+        text_latents = rearrange(text_latents, '(m b) ... -> m b ...', m = num_batch_texts)
+        image_latents = rearrange(image_latents, '(m b) ... -> m b ...', m = num_batch_images)
 
-        # early return, if needed (inference-time similarity only)
+        if self.extra_latent_projection:
+            text_latents_extra = rearrange(text_latents_extra, '(m b) ... -> m b ...', m = num_batch_texts)
+            image_latents_extra = rearrange(image_latents_extra, '(m b) ... -> m b ...', m = num_batch_images)
 
-        if not return_loss and self.use_all_token_embeds:
-            einsum_args = (
-                text_latents_extra,
-                image_latents_extra
-            ) if self.extra_latent_projection and not text_to_image else (text_latents, image_latents)
-            return einsum('b d, b i d -> b t i', *einsum_args) * temp
+        # contrastive loss
 
-        if not return_loss and not self.use_all_token_embeds:
-            einsum_args = (
-                text_latents_extra,
-                image_latents_extra
-            ) if self.extra_latent_projection and not text_to_image else (text_latents, image_latents)
-            return einsum('b d, b d -> b', *einsum_args) * temp
+        """
+        m - num batches of text (for multiview)
+        n - num batches of images (for multiview)
+        x - batches of text
+        y - batches of images
+        t - sequence dimension along text tokens
+        i - sequence dimension along image tokens
+        """
 
-        # ------------------------------------------------------------------
-        # SigLIP-style sigmoid contrastive loss (pairwise logistic loss)
-        # ------------------------------------------------------------------
-        # 当前实现假设没有 multiview augment（aug_text / aug_image），
-        # 即 num_batch_texts = num_batch_images = 1。
-        # 如果之后你要用 multiview，我们再专门把多视角扩展到 SigLIP 上。
+        if self.use_all_token_embeds:
+            # fine-grained CLIP logic
+            sim_text_to_image = einsum('m x t d, n y i d -> m n x y t i', text_latents, image_latents) * temp
 
-        b = text_latents.shape[0]
-        assert b == image_latents.shape[0], "Text and image batch size must match for SigLIP loss"
+            sim_image_to_text = sim_text_to_image
+            if self.extra_latent_projection:
+                sim_image_to_text = einsum('m x t d, n y i d -> m n x y t i', text_latents_extra, image_latents_extra) * temp
 
-        # pairwise logits for all image–text pairs
-        # shape: [b, b], entry (i, j) = <text_i, image_j>
-        logits = text_latents @ image_latents.t()
-        logits = logits * temp + self.logit_bias
+            text_to_image = reduce(sim_text_to_image, '... t i -> ... t', 'max')
+            text_to_image_mask = rearrange(text_mask, '(m b) t -> m 1 b 1 t', m = num_batch_texts).bool()
+            text_to_image = masked_mean(text_to_image, text_to_image_mask, dim = -1)
 
-        # labels: +1 on the diagonal (matching pairs), -1 elsewhere
-        # 对应你给我的伪代码：
-        # labels = 2 * eye(n) - ones(n)  # -1 with diagonal 1
-        labels = 2.0 * torch.eye(b, device=device, dtype=logits.dtype) - 1.0
+            image_to_text_mask = rearrange(text_mask, '(m b) t -> m 1 b 1 t 1', m = num_batch_texts).bool()
+            masked_sim = sim_image_to_text.masked_fill(~image_to_text_mask, max_neg_value(sim_image_to_text.dtype))
+            image_to_text = reduce(reduce(masked_sim, '... t i -> ... i', 'max'), '... i -> ...', 'mean')
+        else:
+            text_to_image = einsum('m t d, n i d -> m n t i', text_latents, image_latents) * temp
+            image_to_text = rearrange(text_to_image, '... t i -> ... i t')
 
-        # SigLIP 风格的 pairwise logistic 损失：
-        # l = -sum(log_sigmoid(labels * logits)) / n
-        # 注意是 /b 而不是 /(b*b)，和论文保持一致。
-        cl_loss = -F.logsigmoid(labels * logits).sum() / b
+            if self.extra_latent_projection:
+                image_to_text = einsum('m t d, n i d -> m n i t', text_latents_extra, image_latents_extra) * temp
 
-        # 当前不使用 multiview 对比损失
-        multiview_cl_loss = torch.zeros(1, device=device, dtype=cl_loss.dtype)
+        # calculate loss
 
+        text_to_image = rearrange(text_to_image, 'm n ... -> (m n) ...')
+        image_to_text = rearrange(image_to_text, 'm n ... -> (m n) ...')
+
+
+        # exponentiate
+        text_to_image_exp, image_to_text_exp = map(torch.exp, (text_to_image, image_to_text))
+
+        # numerators
+        text_to_image_pos, image_to_text_pos = map(matrix_diag, (text_to_image_exp, image_to_text_exp))
+
+        # denominator
+
+        if self.decoupled_contrastive_learning:
+            pos_mask = torch.eye(b, device = device, dtype = torch.bool)
+            text_to_image_exp, image_to_text_exp = map(lambda t: t.masked_fill(pos_mask, 0.), (text_to_image_exp, image_to_text_exp))
+
+        text_to_image_denom, image_to_text_denom = map(lambda t: t.sum(dim = -1), (text_to_image_exp, image_to_text_exp))
+
+        # loss
+
+        text_to_image_loss = (-log(text_to_image_pos) + log(text_to_image_denom)).mean(dim = -1)
+        image_to_text_loss = (-log(image_to_text_pos) + log(image_to_text_denom)).mean(dim = -1)
+
+        # calculate CL loss
+
+        cl_losses = (text_to_image_loss + image_to_text_loss) / 2
+
+        # get main CL loss vs multiview CL losses
+
+        cl_loss, multiview_cl_loss = cl_losses[0], cl_losses[1:]
 
         # if no augmented text or images passed in, multiview loss weight is 0
 
