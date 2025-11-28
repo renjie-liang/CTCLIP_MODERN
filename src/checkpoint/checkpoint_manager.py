@@ -322,7 +322,21 @@ class CheckpointManager:
         torch.set_rng_state(states['torch'])
 
         if torch.cuda.is_available() and 'cuda' in states:
-            torch.cuda.set_rng_state_all(states['cuda'])
+            saved_cuda_states = states['cuda']
+            current_gpu_count = torch.cuda.device_count()
+            saved_gpu_count = len(saved_cuda_states)
+
+            if current_gpu_count != saved_gpu_count:
+                warnings.warn(
+                    f"GPU count mismatch: checkpoint was saved with {saved_gpu_count} GPU(s), "
+                    f"but currently {current_gpu_count} GPU(s) available. "
+                    f"Restoring random states for min({current_gpu_count}, {saved_gpu_count}) GPU(s)."
+                )
+
+            # Only restore states for GPUs that are currently available
+            num_gpus_to_restore = min(current_gpu_count, saved_gpu_count)
+            for i in range(num_gpus_to_restore):
+                torch.cuda.set_rng_state(saved_cuda_states[i], device=i)
 
     def list_checkpoints(self) -> list:
         """List all available checkpoints"""
