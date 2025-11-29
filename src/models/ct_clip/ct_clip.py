@@ -634,9 +634,11 @@ class CTCLIP(nn.Module):
     ):
         # Clear timing buffer at start of forward
         if self.profile_timing:
-            self.timing_buffer.clear()
-            # Synchronize at the very beginning to ensure clean timing
+            # CRITICAL: Measure total forward time from start to end
             torch.cuda.synchronize()
+            _forward_total_start = time.time()
+
+            self.timing_buffer.clear()
 
         b, device = text.input_ids.shape[0], device
 
@@ -960,6 +962,11 @@ class CTCLIP(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['loss_computation'] = time.time() - t_start_loss
 
+            # Measure total forward time
+            torch.cuda.synchronize()
+            _forward_total_time = time.time() - _forward_total_start
+            self.timing_buffer['_total_forward_measured'] = _forward_total_time
+
             # Debug: print every 100 forward passes to verify timing is working
             if not hasattr(self, '_debug_count'):
                 self._debug_count = 0
@@ -970,12 +977,13 @@ class CTCLIP(nn.Module):
                 print(f"  Timing buffer ALL KEYS:")
                 total_accounted = 0
                 for key, value in sorted(self.timing_buffer.items()):
-                    if key != 'ctvit_detail' and not isinstance(value, dict):
+                    if key != 'ctvit_detail' and key != '_total_forward_measured' and not isinstance(value, dict):
                         print(f"    {key}: {value*1000:.2f}ms")
                         total_accounted += value
-                print(f"  >> Total accounted: {total_accounted*1000:.2f}ms")
-                print(f"  >> Trainer reports total forward: ~4500ms")
-                print(f"  >> MISSING: ~{4500 - total_accounted*1000:.0f}ms !!")
+                print(f"  >> Sum of components: {total_accounted*1000:.2f}ms")
+                print(f"  >> MEASURED total forward (start to end): {_forward_total_time*1000:.2f}ms")
+                print(f"  >> Trainer reports: ~4500ms")
+                print(f"  >> Unaccounted within forward: {(_forward_total_time - total_accounted)*1000:.2f}ms")
 
         return loss
 
