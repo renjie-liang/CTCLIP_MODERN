@@ -1,5 +1,6 @@
 import math
 import copy
+import time
 from contextlib import contextmanager
 from functools import partial, wraps
 from pathlib import Path
@@ -584,6 +585,10 @@ class CTCLIP(nn.Module):
 
         self.tokenizer= AutoTokenizer.from_pretrained('microsoft/BiomedVLP-CXR-BERT-specialized',do_lower_case=True, trust_remote_code=True)
 
+        # Performance profiling
+        self.profile_timing = False  # Will be set by trainer
+        self.timing_buffer = {}
+
     def state_dict(self, *args, **kwargs):
         return super().state_dict(*args, **kwargs)
 
@@ -627,6 +632,10 @@ class CTCLIP(nn.Module):
             img_embed=None
 
     ):
+        # Clear timing buffer at start of forward
+        if self.profile_timing:
+            self.timing_buffer.clear()
+
         b, device = text.input_ids.shape[0], device
 
         # derive text mask
@@ -677,6 +686,9 @@ class CTCLIP(nn.Module):
         assert not (self.multiview_loss_weight == 0 and is_multiview), 'multiview loss weight cannot be 0 if augmented text or images passed in'
 
         # get encoded text
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
 
         text_args = (text.input_ids,text.attention_mask)
 
@@ -686,6 +698,10 @@ class CTCLIP(nn.Module):
 
         text_embeddings = self.text_transformer(text.input_ids, attention_mask = text.attention_mask )
         enc_text = text_embeddings[0]
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['text_encoder'] = time.time() - t_start
 
         # depending on whether text is using causal mask, post process, moving eos token to the first position
 
@@ -707,6 +723,9 @@ class CTCLIP(nn.Module):
             enc_text = torch.cat((eos_tokens, rest_tokens), dim = 1)
 
         # whether to train image encoder, in the case that the image net was pretrained as recommended in LiT
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
 
         """enc_image = model_forward_with_context(
             fn = self.visual_transformer,
@@ -718,14 +737,31 @@ class CTCLIP(nn.Module):
             enc_image = img_embed
         else:
             enc_image= self.visual_transformer(image, return_encoded_tokens=True)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['visual_encoder'] = time.time() - t_start
+            # Copy CT-VIT internal timing if available
+            if hasattr(self.visual_transformer, 'timing_buffer'):
+                self.timing_buffer['ctvit_detail'] = self.visual_transformer.timing_buffer.copy()
+
         if return_encodings:
             return enc_text, enc_image
-        
+
+        # Image pooling and reshaping
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         global h_r, w_r, z_r
         h_r, w_r, z_r = enc_image.shape[1], enc_image.shape[2], enc_image.shape[3]
         enc_image_send = enc_image
         enc_image = torch.mean(enc_image, dim=1)
         enc_image = enc_image.view(enc_image.shape[0], -1)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['image_pooling'] = time.time() - t_start
 
 
         if self.use_all_token_embeds:
@@ -738,6 +774,10 @@ class CTCLIP(nn.Module):
             image_embeds = enc_image[:, :] if enc_image.ndim == 3 else enc_image
 
         # project to latents
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         #text_embeds = text_embeds.view(text_embeds.shape[0], -1)
         text_embeds = text_embeds[:,0,:]
 
@@ -754,6 +794,10 @@ class CTCLIP(nn.Module):
             text_latents_extra = self.to_text_latent_extra(text_embeds)
             image_latents_extra = self.to_visual_latent_extra(image_embeds)
             text_latents_extra, image_latents_extra = map(l2norm, (text_latents_extra, image_latents_extra))
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['projection'] = time.time() - t_start
 
         # whether to early return latents
 
@@ -779,6 +823,9 @@ class CTCLIP(nn.Module):
             return einsum('b d, b d -> b', *einsum_args) * temp
 
         # split out multiview dimension for text and images
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
 
         text_latents = rearrange(text_latents, '(m b) ... -> m b ...', m = num_batch_texts)
         image_latents = rearrange(image_latents, '(m b) ... -> m b ...', m = num_batch_images)
@@ -869,6 +916,10 @@ class CTCLIP(nn.Module):
 
         if is_multiview:
             loss = loss + multiview_cl_loss.mean() * multiview_loss_weight
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['contrastive_loss'] = time.time() - t_start
 
         return loss
 

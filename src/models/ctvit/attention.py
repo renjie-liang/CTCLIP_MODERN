@@ -9,6 +9,7 @@ CTViT 注意力模块 (Attention Modules)
 """
 
 import math
+import time
 import torch
 import torch.nn.functional as F
 from torch import nn, einsum
@@ -615,6 +616,19 @@ class Transformer(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([])
 
+        # Store optimization flags for timing labels
+        self.profile_timing = False  # Will be set by parent model
+        self.use_flash_attention = use_flash_attention
+        self.use_rms_norm = use_rms_norm
+        self.use_swiglu = use_swiglu
+
+        # Component labels for profiling
+        self.component_labels = {
+            'attention': 'Flash Attention' if use_flash_attention else 'Regular Attention',
+            'feedforward': 'SwiGLU' if use_swiglu else 'GEGLU',
+            'norm': 'RMSNorm' if use_rms_norm else 'LayerNorm'
+        }
+
         # Choose attention class based on optimization flag
         attn_class = FlashAttentionQKV if use_flash_attention else Attention
 
@@ -689,8 +703,13 @@ class Transformer(nn.Module):
             cross_attn_context_mask: Cross-attention的mask
 
         Returns:
-            输出特征 (B, N, D)
+            输出特征 (B, N, D) 或 (输出特征, timing_dict) 如果profile_timing=True
         """
+        # Initialize timing accumulators
+        total_attn_time = 0.0
+        total_ff_time = 0.0
+        total_norm_time = 0.0
+
         # 遍历每一层
         for peg, self_attn, cross_attn, ff in self.layers:
             # 1. 位置编码 (如果有)
@@ -698,16 +717,58 @@ class Transformer(nn.Module):
                 x = peg(x, shape=video_shape) + x
 
             # 2. Self-Attention + Residual
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                t_start = time.time()
+
             x = self_attn(x, mask=self_attn_mask) + x
 
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                total_attn_time += time.time() - t_start
 
             # 3. Cross-Attention + Residual (如果有)
             if exists(cross_attn) and exists(context):
+                if self.profile_timing:
+                    torch.cuda.synchronize()
+                    t_start = time.time()
+
                 x = cross_attn(x, context=context, mask=cross_attn_context_mask) + x
 
+                if self.profile_timing:
+                    torch.cuda.synchronize()
+                    total_attn_time += time.time() - t_start
 
             # 4. FeedForward + Residual
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                t_start = time.time()
+
             x = ff(x) + x
 
+            if self.profile_timing:
+                torch.cuda.synchronize()
+                total_ff_time += time.time() - t_start
+
         # 输出归一化
-        return self.norm_out(x)
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
+        x = self.norm_out(x)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            total_norm_time += time.time() - t_start
+
+        # Return timing data if profiling
+        if self.profile_timing:
+            timing_data = {
+                'attention': total_attn_time,
+                'feedforward': total_ff_time,
+                'norm': total_norm_time,
+                'labels': self.component_labels
+            }
+            return x, timing_data
+        else:
+            return x
