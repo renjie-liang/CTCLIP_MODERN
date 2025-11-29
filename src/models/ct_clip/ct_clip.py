@@ -967,10 +967,15 @@ class CTCLIP(nn.Module):
             if self._debug_count % 100 == 1:
                 print(f"\n[CT-CLIP INTERNAL DEBUG] Forward #{self._debug_count}:")
                 print(f"  profile_timing: {self.profile_timing}")
-                print(f"  Timing buffer contents:")
-                for key in ['ssl', 'text_encoder', 'visual_encoder', 'similarity_computation', 'loss_computation']:
-                    if key in self.timing_buffer:
-                        print(f"    {key}: {self.timing_buffer[key]*1000:.2f}ms")
+                print(f"  Timing buffer ALL KEYS:")
+                total_accounted = 0
+                for key, value in sorted(self.timing_buffer.items()):
+                    if key != 'ctvit_detail' and not isinstance(value, dict):
+                        print(f"    {key}: {value*1000:.2f}ms")
+                        total_accounted += value
+                print(f"  >> Total accounted: {total_accounted*1000:.2f}ms")
+                print(f"  >> Trainer reports total forward: ~4500ms")
+                print(f"  >> MISSING: ~{4500 - total_accounted*1000:.0f}ms !!")
 
         return loss
 
