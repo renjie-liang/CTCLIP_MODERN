@@ -104,7 +104,7 @@ validation:
   eval_every_n_epochs: 0.5  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
   eval_every_n_steps: null  # Alternative: specify exact steps
 
-  eval_samples: 200  # Validate on 200 samples for speed (null = all samples)
+  eval_samples: null  # Validate on 200 samples for speed (null = all samples)
   metrics: ["auroc", "auprc", "f1", "precision", "recall"]
   use_bootstrap: false  # False for training, True for inference
   threshold: 0.5

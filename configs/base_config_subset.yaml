@@ -30,8 +30,8 @@ data:
   labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
 
   # DataLoader configuration
-  batch_size: 4
-  num_workers: 2  
+  batch_size: 16
+  num_workers: 4  
   prefetch_factor: 1  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
@@ -95,7 +95,7 @@ training:
 
   # Learning rate scheduling
   warmup_epochs: null  # Alternative: specify epochs
-  warmup_steps: 1000   # Fixed 1000 steps warmup (~0.14 epochs)
+  warmup_steps: 300   
   min_lr_ratio: 0.01   # Minimum lr as ratio of initial lr
 
 # Validation configuration
@@ -104,7 +104,7 @@ validation:
   eval_every_n_epochs: 0.5  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
   eval_every_n_steps: null  # Alternative: specify exact steps
 
-  eval_samples: 200  # Validate on 200 samples for speed (null = all samples)
+  eval_samples: null  # Validate on 200 samples for speed (null = all samples)
   metrics: ["auroc", "auprc", "f1", "precision", "recall"]
   use_bootstrap: false  # False for training, True for inference
   threshold: 0.5
