@@ -119,10 +119,6 @@ class CTClipTrainer(nn.Module):
                 'optimizer_step': [],
                 'total_step': []
             }
-            # Enable model internal profiling
-            self.model.profile_timing = True
-            if hasattr(self.model, 'visual_transformer'):
-                self.model.visual_transformer.profile_timing = True
 
         # Load pathology classes
         self.pathologies = self._load_pathology_classes(data_cfg['labels_valid'])
@@ -228,6 +224,14 @@ class CTClipTrainer(nn.Module):
         self.model, self.optim, self.scheduler = self.accelerator.prepare(
             self.model, self.optim, self.scheduler
         )
+
+        # Enable model internal profiling (MUST be after prepare() to access the actual model)
+        if self.profile_timing:
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            unwrapped_model.profile_timing = True
+            if hasattr(unwrapped_model, 'visual_transformer'):
+                unwrapped_model.visual_transformer.profile_timing = True
+            self.print("✅ Model profiling enabled")
 
         # Initialize components
         self.print("\n" + "="*80)
