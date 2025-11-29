@@ -635,6 +635,8 @@ class CTCLIP(nn.Module):
         # Clear timing buffer at start of forward
         if self.profile_timing:
             self.timing_buffer.clear()
+            # Synchronize at the very beginning to ensure clean timing
+            torch.cuda.synchronize()
 
         b, device = text.input_ids.shape[0], device
 
@@ -704,6 +706,9 @@ class CTCLIP(nn.Module):
             self.timing_buffer['text_encoder'] = time.time() - t_start
 
         # depending on whether text is using causal mask, post process, moving eos token to the first position
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
 
         if self.text_causal_mask:
             eos_text_mask = (text == self.text_eos_id)
@@ -721,6 +726,10 @@ class CTCLIP(nn.Module):
             eos_tokens = rearrange(eos_tokens, '(b d) -> b 1 d', b = b)
             rest_tokens = rearrange(rest_tokens, '(b n d) -> b n d', b = b, n = text_len - 1)
             enc_text = torch.cat((eos_tokens, rest_tokens), dim = 1)
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['text_postprocess'] = time.time() - t_start
 
         # whether to train image encoder, in the case that the image net was pretrained as recommended in LiT
         if self.profile_timing:
@@ -764,6 +773,11 @@ class CTCLIP(nn.Module):
             self.timing_buffer['image_pooling'] = time.time() - t_start
 
 
+        # Select embeddings
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
+
         if self.use_all_token_embeds:
             assert enc_text.ndim == 3, 'encoded text must have 3 dimensions (batch, seq, features)'
             assert enc_image.ndim == 3, 'encoded image must have 3 dimensions (batch, seq [height x width], features)'
@@ -772,6 +786,10 @@ class CTCLIP(nn.Module):
         else:
             text_embeds = enc_text[:, :] if enc_text.ndim == 3 else enc_text
             image_embeds = enc_image[:, :] if enc_image.ndim == 3 else enc_image
+
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['embed_selection'] = time.time() - t_start
 
         # project to latents
         if self.profile_timing:

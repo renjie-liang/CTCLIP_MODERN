@@ -652,17 +652,23 @@ class CTClipTrainer(nn.Module):
                             self.print(f"     Model Forward:          {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
                             if model_timing:
                                 text_enc_time = model_timing.get('text_encoder', 0)
+                                text_post_time = model_timing.get('text_postprocess', 0)
                                 visual_enc_time = model_timing.get('visual_encoder', 0)
                                 image_pool_time = model_timing.get('image_pooling', 0)
+                                embed_sel_time = model_timing.get('embed_selection', 0)
                                 proj_time = model_timing.get('projection', 0)
                                 cl_loss_time = model_timing.get('contrastive_loss', 0)
                                 ctvit_detail = model_timing.get('ctvit_detail', {})
 
-                                other_time = avg_forward - text_enc_time - visual_enc_time - image_pool_time - proj_time - cl_loss_time
+                                other_time = avg_forward - text_enc_time - text_post_time - visual_enc_time - image_pool_time - embed_sel_time - proj_time - cl_loss_time
 
                                 # Text Encoder
                                 if text_enc_time > 0:
                                     self.print(f"       ├─ Text Encoder:      {text_enc_time*1000:7.2f}ms ({text_enc_time/avg_forward*100:5.1f}%)  [BiomedVLP-BERT]")
+
+                                # Text Postprocessing
+                                if text_post_time > 0:
+                                    self.print(f"       ├─ Text Postprocess:  {text_post_time*1000:7.2f}ms ({text_post_time/avg_forward*100:5.1f}%)")
 
                                 # Visual Encoder (CT-VIT)
                                 if visual_enc_time > 0:
@@ -729,6 +735,10 @@ class CTClipTrainer(nn.Module):
                                 # Image Pooling
                                 if image_pool_time > 0:
                                     self.print(f"       ├─ Image Pooling:     {image_pool_time*1000:7.2f}ms ({image_pool_time/avg_forward*100:5.1f}%)")
+
+                                # Embed Selection
+                                if embed_sel_time > 0:
+                                    self.print(f"       ├─ Embed Selection:   {embed_sel_time*1000:7.2f}ms ({embed_sel_time/avg_forward*100:5.1f}%)")
 
                                 # Projection
                                 if proj_time > 0:
