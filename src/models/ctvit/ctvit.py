@@ -179,9 +179,11 @@ class CTViT(nn.Module):
         # ===== Encoder =====
         # 1. Spatial Encoder: Attention over spatial patches for each time frame
         self.enc_spatial_transformer = Transformer(depth=spatial_depth, **transformer_kwargs)
+        self.enc_spatial_transformer.profile_timing = self.profile_timing
 
         # 2. Temporal Encoder: Attention over time sequence for each spatial location
         self.enc_temporal_transformer = Transformer(depth=temporal_depth, **transformer_kwargs)
+        self.enc_temporal_transformer.profile_timing = self.profile_timing
 
         # ===== Vector Quantization =====
         # Quantize continuous features to discrete codebook indices
@@ -270,11 +272,28 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             t_start = time.time()
 
-        tokens = self.enc_spatial_transformer(tokens, attn_bias=attn_bias, video_shape=video_shape)
+        result = self.enc_spatial_transformer(tokens, attn_bias=attn_bias, video_shape=video_shape)
 
         if self.profile_timing:
             torch.cuda.synchronize()
-            self.timing_buffer['spatial_transformer'] = time.time() - t_start
+            total_time = time.time() - t_start
+
+            # Handle tuple return (tokens, timing_data) when profiling
+            if isinstance(result, tuple):
+                tokens, spatial_timing = result
+                # Store nested timing structure
+                self.timing_buffer['spatial_transformer'] = {
+                    'total': total_time,
+                    'attention': spatial_timing['attention'],
+                    'feedforward': spatial_timing['feedforward'],
+                    'norm': spatial_timing['norm'],
+                    'labels': spatial_timing['labels']
+                }
+            else:
+                tokens = result
+                self.timing_buffer['spatial_transformer'] = total_time
+        else:
+            tokens = result
 
         # Reshape back to 4D: (B*T', H'*W', D) -> (B, T', H', W', D)
         if self.profile_timing:
@@ -305,11 +324,28 @@ class CTViT(nn.Module):
             torch.cuda.synchronize()
             t_start = time.time()
 
-        tokens = self.enc_temporal_transformer(tokens, video_shape=video_shape)
+        result = self.enc_temporal_transformer(tokens, video_shape=video_shape)
 
         if self.profile_timing:
             torch.cuda.synchronize()
-            self.timing_buffer['temporal_transformer'] = time.time() - t_start
+            total_time = time.time() - t_start
+
+            # Handle tuple return (tokens, timing_data) when profiling
+            if isinstance(result, tuple):
+                tokens, temporal_timing = result
+                # Store nested timing structure
+                self.timing_buffer['temporal_transformer'] = {
+                    'total': total_time,
+                    'attention': temporal_timing['attention'],
+                    'feedforward': temporal_timing['feedforward'],
+                    'norm': temporal_timing['norm'],
+                    'labels': temporal_timing['labels']
+                }
+            else:
+                tokens = result
+                self.timing_buffer['temporal_transformer'] = total_time
+        else:
+            tokens = result
 
         # Reshape back to 4D: (B*H'*W', T', D) -> (B, T', H', W', D)
         if self.profile_timing:
