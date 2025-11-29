@@ -651,16 +651,27 @@ class CTClipTrainer(nn.Module):
                             # Model Forward breakdown (CT-CLIP)
                             self.print(f"     Model Forward:          {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
                             if model_timing:
+                                ssl_time = model_timing.get('ssl', 0)
+                                data_aug_time = model_timing.get('data_augmentation', 0)
                                 text_enc_time = model_timing.get('text_encoder', 0)
                                 text_post_time = model_timing.get('text_postprocess', 0)
                                 visual_enc_time = model_timing.get('visual_encoder', 0)
                                 image_pool_time = model_timing.get('image_pooling', 0)
                                 embed_sel_time = model_timing.get('embed_selection', 0)
                                 proj_time = model_timing.get('projection', 0)
-                                cl_loss_time = model_timing.get('contrastive_loss', 0)
+                                similarity_time = model_timing.get('similarity_computation', 0)
+                                loss_comp_time = model_timing.get('loss_computation', 0)
                                 ctvit_detail = model_timing.get('ctvit_detail', {})
 
-                                other_time = avg_forward - text_enc_time - text_post_time - visual_enc_time - image_pool_time - embed_sel_time - proj_time - cl_loss_time
+                                other_time = avg_forward - ssl_time - data_aug_time - text_enc_time - text_post_time - visual_enc_time - image_pool_time - embed_sel_time - proj_time - similarity_time - loss_comp_time
+
+                                # SSL (MLM + Visual SSL)
+                                if ssl_time > 0:
+                                    self.print(f"       ├─ SSL (MLM/VisSSL):  {ssl_time*1000:7.2f}ms ({ssl_time/avg_forward*100:5.1f}%)")
+
+                                # Data Augmentation
+                                if data_aug_time > 0:
+                                    self.print(f"       ├─ Data Augmentation: {data_aug_time*1000:7.2f}ms ({data_aug_time/avg_forward*100:5.1f}%)")
 
                                 # Text Encoder
                                 if text_enc_time > 0:
@@ -744,9 +755,13 @@ class CTClipTrainer(nn.Module):
                                 if proj_time > 0:
                                     self.print(f"       ├─ Projection:        {proj_time*1000:7.2f}ms ({proj_time/avg_forward*100:5.1f}%)")
 
-                                # Contrastive Loss
-                                if cl_loss_time > 0:
-                                    self.print(f"       ├─ Contrastive Loss:  {cl_loss_time*1000:7.2f}ms ({cl_loss_time/avg_forward*100:5.1f}%)")
+                                # Similarity Computation (einsum)
+                                if similarity_time > 0:
+                                    self.print(f"       ├─ Similarity Compute:{similarity_time*1000:7.2f}ms ({similarity_time/avg_forward*100:5.1f}%)  [einsum operations]")
+
+                                # Loss Computation
+                                if loss_comp_time > 0:
+                                    self.print(f"       ├─ Loss Computation:  {loss_comp_time*1000:7.2f}ms ({loss_comp_time/avg_forward*100:5.1f}%)")
 
                                 # Other operations
                                 if other_time > 0:
