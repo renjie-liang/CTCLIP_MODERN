@@ -573,12 +573,26 @@ class CTClipTrainer(nn.Module):
 
                 if self.global_step % 10 == 0:
                     memory_info = get_memory_info()
+
+                    # Calculate model time (forward + backward + optimizer)
+                    model_time = 0
+                    if self.profile_timing:
+                        model_time = step_timing.get('forward', 0) + step_timing.get('backward', 0) + step_timing.get('optimizer_step', 0)
+                        display_total_time = total_step_time
+                        display_data_time = data_load_time
+                    else:
+                        # Use average time if not profiling
+                        display_total_time = avg_step_time
+                        display_data_time = 0
+                        model_time = avg_step_time
+
                     self.print(
-                        f"Step {self.global_step}/{self.max_steps} (Epoch {current_epoch_float:.2f}) | "
-                        f"Loss: {loss:.4f} | LR: {current_lr:.2e} | "
-                        f"Time/Step: {avg_step_time:.2f}s | ETA: {eta} | Elapsed: {elapsed}"
+                        f"Ep {current_epoch_float:.2f} | Step {self.global_step}/{self.max_steps} | "
+                        f"loss: {loss:.4f} | lr: {current_lr:.2e} | "
+                        f"time: {display_total_time:.2f}s (data: {display_data_time:.2f}s, model: {model_time:.2f}s) | "
+                        f"ETA: {eta} | elapsed: {elapsed}"
                     )
-                    self.print(f"  {memory_info}")
+                    # self.print(f"  {memory_info}")  # Commented out GPU memory info
 
                     # Print detailed timing breakdown if profiling enabled
                     if self.profile_timing:
@@ -624,20 +638,21 @@ class CTClipTrainer(nn.Module):
                             self.print(f"     ─────────────────────────────────────────")
                             self.print(f"     Total Step Time:  {avg_total*1000:7.2f}ms (100.0%)\n")
 
-                    # Log to logger
-                    log_dict = {
-                        'loss': loss,
-                        'learning_rate': current_lr,
-                        'epoch': current_epoch_float,
-                        'step_time': avg_step_time,
-                    }
-                    if self.profile_timing:
-                        log_dict.update({
-                            'timing/data_loading': data_load_time,
-                            'timing/total_step': total_step_time,
-                        })
-                        log_dict.update({f'timing/{k}': v for k, v in step_timing.items()})
-                    self.logger.log_metrics(log_dict, step=self.global_step, prefix='train')
+                    # Log to logger (commented out to avoid duplicate console output)
+                    # Uncomment if you need WandB logging
+                    # log_dict = {
+                    #     'loss': loss,
+                    #     'learning_rate': current_lr,
+                    #     'epoch': current_epoch_float,
+                    #     'step_time': avg_step_time,
+                    # }
+                    # if self.profile_timing:
+                    #     log_dict.update({
+                    #         'timing/data_loading': data_load_time,
+                    #         'timing/total_step': total_step_time,
+                    #     })
+                    #     log_dict.update({f'timing/{k}': v for k, v in step_timing.items()})
+                    # self.logger.log_metrics(log_dict, step=self.global_step, prefix='train')
 
                 # Validation
                 if self.global_step > 0 and self.global_step % self.eval_every_n_steps == 0:
