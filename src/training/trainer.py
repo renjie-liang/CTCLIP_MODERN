@@ -119,7 +119,8 @@ class CTClipTrainer(nn.Module):
                 'total_step': []
             }
             # Enable model internal profiling
-            self.model.visual.profile_timing = True
+            if hasattr(self.model, 'visual_transformer'):
+                self.model.visual_transformer.profile_timing = True
 
         # Load pathology classes
         self.pathologies = self._load_pathology_classes(data_cfg['labels_valid'])
@@ -611,8 +612,8 @@ class CTClipTrainer(nn.Module):
                             ctvit_timing = {}
                             try:
                                 unwrapped_model = self.accelerator.unwrap_model(self.model)
-                                if hasattr(unwrapped_model, 'visual') and hasattr(unwrapped_model.visual, 'timing_buffer'):
-                                    ctvit_timing = unwrapped_model.visual.timing_buffer.copy()
+                                if hasattr(unwrapped_model, 'visual_transformer') and hasattr(unwrapped_model.visual_transformer, 'timing_buffer'):
+                                    ctvit_timing = unwrapped_model.visual_transformer.timing_buffer.copy()
                             except:
                                 pass
 
