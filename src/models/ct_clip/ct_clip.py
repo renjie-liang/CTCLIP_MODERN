@@ -960,6 +960,18 @@ class CTCLIP(nn.Module):
             torch.cuda.synchronize()
             self.timing_buffer['loss_computation'] = time.time() - t_start_loss
 
+            # Debug: print every 100 forward passes to verify timing is working
+            if not hasattr(self, '_debug_count'):
+                self._debug_count = 0
+            self._debug_count += 1
+            if self._debug_count % 100 == 1:
+                print(f"\n[CT-CLIP INTERNAL DEBUG] Forward #{self._debug_count}:")
+                print(f"  profile_timing: {self.profile_timing}")
+                print(f"  Timing buffer contents:")
+                for key in ['ssl', 'text_encoder', 'visual_encoder', 'similarity_computation', 'loss_computation']:
+                    if key in self.timing_buffer:
+                        print(f"    {key}: {self.timing_buffer[key]*1000:.2f}ms")
+
         return loss
 
 
