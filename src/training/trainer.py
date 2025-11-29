@@ -531,10 +531,11 @@ class CTClipTrainer(nn.Module):
             self.model.train()
 
             # Get next batch (measure TOTAL step time including data loading)
+            # Always record time (minimal overhead), but only sync GPU if profiling
             if self.profile_timing:
-                torch.cuda.synchronize()
-                step_start = time.time()  # Start timing BEFORE data loading
-                data_load_start = time.time()
+                torch.cuda.synchronize()  # Only sync when profiling (expensive)
+            step_start = time.time()  # Start timing BEFORE data loading
+            data_load_start = time.time()
 
             try:
                 batch = next(dataloader_iter)
@@ -547,11 +548,8 @@ class CTClipTrainer(nn.Module):
                 batch_idx_in_epoch = 0
                 self.print(f"\n--- Epoch {epoch} ---")
 
-            if self.profile_timing:
-                torch.cuda.synchronize()
-                data_load_time = time.time() - data_load_start
-            else:
-                data_load_time = 0
+            # Record data loading time (always, minimal overhead)
+            data_load_time = time.time() - data_load_start
 
             # Training step
             result = self.train_step(batch, batch_idx_in_epoch)
@@ -559,9 +557,11 @@ class CTClipTrainer(nn.Module):
             step_timing = result['timing']
             batch_idx_in_epoch += 1
 
+            # Calculate total step time (always)
+            # Only sync GPU when profiling for precise timing
             if self.profile_timing:
-                torch.cuda.synchronize()
-                total_step_time = time.time() - step_start  # Total = data loading + GPU ops
+                torch.cuda.synchronize()  # Precise GPU timing (expensive)
+            total_step_time = time.time() - step_start  # Total = data loading + GPU ops
 
             # Log every N steps (after accumulation)
             if (batch_idx_in_epoch + 1) % self.gradient_accumulation_steps == 0:
@@ -574,23 +574,15 @@ class CTClipTrainer(nn.Module):
                 if self.global_step % 10 == 0:
                     memory_info = get_memory_info()
 
-                    # Calculate model time (forward + backward + optimizer)
-                    model_time = 0
-                    if self.profile_timing:
-                        model_time = step_timing.get('forward', 0) + step_timing.get('backward', 0) + step_timing.get('optimizer_step', 0)
-                        display_total_time = total_step_time
-                        display_data_time = data_load_time
-                    else:
-                        # Use average time if not profiling
-                        display_total_time = avg_step_time
-                        display_data_time = 0
-                        model_time = avg_step_time
+                    # Calculate model time (total - data loading)
+                    # Always show timing breakdown (time.time() has negligible overhead)
+                    model_time = total_step_time - data_load_time
 
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     self.print(
                         f"[{timestamp}] Ep {current_epoch_float:.2f} | Step {self.global_step}/{self.max_steps} | "
                         f"loss: {loss:.4f} | lr: {current_lr:.2e} | "
-                        f"time: {display_total_time:.2f}s (data: {display_data_time:.2f}s, model: {model_time:.2f}s) | "
+                        f"time: {total_step_time:.2f}s (data: {data_load_time:.2f}s, model: {model_time:.2f}s) | "
                         f"ETA: {eta} | elapsed: {elapsed}"
                     )
                     # self.print(f"  {memory_info}")  # Commented out GPU memory info
