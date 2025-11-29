@@ -645,6 +645,9 @@ class CTCLIP(nn.Module):
         text_mask =text.attention_mask
 
         # ssl
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
 
         text_ssl_loss = 0
         image_ssl_loss = 0
@@ -657,7 +660,14 @@ class CTCLIP(nn.Module):
             text_ssl_loss = self.mlm(text.input_ids, attention_mask = text.attention_mask) if self.use_mlm else 0
             image_ssl_loss = self.visual_ssl(image) if self.use_visual_ssl else 0
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['ssl'] = time.time() - t_start
+
         # concat augmented texts and images and do some asserts
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start = time.time()
 
         num_batch_texts = num_batch_images = 1
 
@@ -687,10 +697,14 @@ class CTCLIP(nn.Module):
         assert not (not return_loss and is_multiview), 'do not pass in augmented texts or images if not training'
         assert not (self.multiview_loss_weight == 0 and is_multiview), 'multiview loss weight cannot be 0 if augmented text or images passed in'
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['data_augmentation'] = time.time() - t_start
+
         # get encoded text
         if self.profile_timing:
             torch.cuda.synchronize()
-            t_start = time.time()
+            t_start_text = time.time()
 
         text_args = (text.input_ids,text.attention_mask)
 
@@ -703,7 +717,7 @@ class CTCLIP(nn.Module):
 
         if self.profile_timing:
             torch.cuda.synchronize()
-            self.timing_buffer['text_encoder'] = time.time() - t_start
+            self.timing_buffer['text_encoder'] = time.time() - t_start_text
 
         # depending on whether text is using causal mask, post process, moving eos token to the first position
         if self.profile_timing:
@@ -843,7 +857,7 @@ class CTCLIP(nn.Module):
         # split out multiview dimension for text and images
         if self.profile_timing:
             torch.cuda.synchronize()
-            t_start = time.time()
+            t_start_similarity = time.time()
 
         text_latents = rearrange(text_latents, '(m b) ... -> m b ...', m = num_batch_texts)
         image_latents = rearrange(image_latents, '(m b) ... -> m b ...', m = num_batch_images)
@@ -852,7 +866,7 @@ class CTCLIP(nn.Module):
             text_latents_extra = rearrange(text_latents_extra, '(m b) ... -> m b ...', m = num_batch_texts)
             image_latents_extra = rearrange(image_latents_extra, '(m b) ... -> m b ...', m = num_batch_images)
 
-        # contrastive loss
+        # contrastive loss - similarity computation
 
         """
         m - num batches of text (for multiview)
@@ -885,7 +899,14 @@ class CTCLIP(nn.Module):
             if self.extra_latent_projection:
                 image_to_text = einsum('m t d, n i d -> m n i t', text_latents_extra, image_latents_extra) * temp
 
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            self.timing_buffer['similarity_computation'] = time.time() - t_start_similarity
+
         # calculate loss
+        if self.profile_timing:
+            torch.cuda.synchronize()
+            t_start_loss = time.time()
 
         text_to_image = rearrange(text_to_image, 'm n ... -> (m n) ...')
         image_to_text = rearrange(image_to_text, 'm n ... -> (m n) ...')
@@ -937,7 +958,7 @@ class CTCLIP(nn.Module):
 
         if self.profile_timing:
             torch.cuda.synchronize()
-            self.timing_buffer['contrastive_loss'] = time.time() - t_start
+            self.timing_buffer['loss_computation'] = time.time() - t_start_loss
 
         return loss
 
