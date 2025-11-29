@@ -650,13 +650,64 @@ class CTClipTrainer(nn.Module):
                             # Model Forward breakdown
                             self.print(f"     Model Forward:          {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
                             if ctvit_timing:
-                                spatial_time = ctvit_timing.get('spatial_transformer', 0)
-                                temporal_time = ctvit_timing.get('temporal_transformer', 0)
+                                spatial_data = ctvit_timing.get('spatial_transformer')
+                                temporal_data = ctvit_timing.get('temporal_transformer')
+
+                                # Handle both old format (float) and new format (dict)
+                                if isinstance(spatial_data, dict):
+                                    spatial_time = spatial_data['total']
+                                else:
+                                    spatial_time = spatial_data if spatial_data else 0
+
+                                if isinstance(temporal_data, dict):
+                                    temporal_time = temporal_data['total']
+                                else:
+                                    temporal_time = temporal_data if temporal_data else 0
+
                                 other_time = avg_forward - spatial_time - temporal_time
+
+                                # Spatial Transformer breakdown
                                 if spatial_time > 0:
                                     self.print(f"       ├─ Spatial Trans:     {spatial_time*1000:7.2f}ms ({spatial_time/avg_total*100:5.1f}%)")
+
+                                    # Show detailed breakdown if available
+                                    if isinstance(spatial_data, dict):
+                                        attn_time = spatial_data.get('attention', 0)
+                                        ff_time = spatial_data.get('feedforward', 0)
+                                        norm_time = spatial_data.get('norm', 0)
+                                        labels = spatial_data.get('labels', {})
+
+                                        if attn_time > 0:
+                                            attn_label = labels.get('attention', 'Attention')
+                                            self.print(f"       │   ├─ Attention Layers: {attn_time*1000:7.2f}ms ({attn_time/spatial_time*100:5.1f}%)  [{attn_label}]")
+                                        if ff_time > 0:
+                                            ff_label = labels.get('feedforward', 'Feed-Forward')
+                                            self.print(f"       │   ├─ Feed-Forward:     {ff_time*1000:7.2f}ms ({ff_time/spatial_time*100:5.1f}%)  [{ff_label}]")
+                                        if norm_time > 0:
+                                            norm_label = labels.get('norm', 'Normalization')
+                                            self.print(f"       │   └─ Normalization:    {norm_time*1000:7.2f}ms ({norm_time/spatial_time*100:5.1f}%)  [{norm_label}]")
+
+                                # Temporal Transformer breakdown
                                 if temporal_time > 0:
                                     self.print(f"       ├─ Temporal Trans:    {temporal_time*1000:7.2f}ms ({temporal_time/avg_total*100:5.1f}%)")
+
+                                    # Show detailed breakdown if available
+                                    if isinstance(temporal_data, dict):
+                                        attn_time = temporal_data.get('attention', 0)
+                                        ff_time = temporal_data.get('feedforward', 0)
+                                        norm_time = temporal_data.get('norm', 0)
+                                        labels = temporal_data.get('labels', {})
+
+                                        if attn_time > 0:
+                                            attn_label = labels.get('attention', 'Attention')
+                                            self.print(f"       │   ├─ Attention Layers: {attn_time*1000:7.2f}ms ({attn_time/temporal_time*100:5.1f}%)  [{attn_label}]")
+                                        if ff_time > 0:
+                                            ff_label = labels.get('feedforward', 'Feed-Forward')
+                                            self.print(f"       │   ├─ Feed-Forward:     {ff_time*1000:7.2f}ms ({ff_time/temporal_time*100:5.1f}%)  [{ff_label}]")
+                                        if norm_time > 0:
+                                            norm_label = labels.get('norm', 'Normalization')
+                                            self.print(f"       │   └─ Normalization:    {norm_time*1000:7.2f}ms ({norm_time/temporal_time*100:5.1f}%)  [{norm_label}]")
+
                                 if other_time > 0:
                                     self.print(f"       └─ Other ops:         {other_time*1000:7.2f}ms ({other_time/avg_total*100:5.1f}%)")
 
