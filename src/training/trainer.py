@@ -30,7 +30,7 @@ from transformers import AutoTokenizer
 
 from ..training import get_optimizer, get_warmup_cosine_schedule
 from ..data.webdataset_loader import CTReportWebDataset
-from ..utils import ETACalculator, get_memory_info
+from ..utils import ETACalculator, get_memory_info, get_detailed_gpu_memory_info
 from ..validation import DiseaseEvaluator
 from ..checkpoint import CheckpointManager
 from ..loggers import create_logger
@@ -118,6 +118,8 @@ class CTClipTrainer(nn.Module):
                 'optimizer_step': [],
                 'total_step': []
             }
+            # Enable model internal profiling
+            self.model.visual.profile_timing = True
 
         # Load pathology classes
         self.pathologies = self._load_pathology_classes(data_cfg['labels_valid'])
@@ -572,12 +574,10 @@ class CTClipTrainer(nn.Module):
                 elapsed = self.eta_calculator.get_elapsed_time()
 
                 if self.global_step % 10 == 0:
-                    memory_info = get_memory_info()
-
                     # Calculate model time (total - data loading)
-                    # Always show timing breakdown (time.time() has negligible overhead)
                     model_time = total_step_time - data_load_time
 
+                    # Simple one-line log (always shown)
                     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     self.print(
                         f"[{timestamp}] Ep {current_epoch_float:.2f} | Step {self.global_step}/{self.max_steps} | "
@@ -585,9 +585,8 @@ class CTClipTrainer(nn.Module):
                         f"time: {total_step_time:.2f}s (data: {data_load_time:.2f}s, model: {model_time:.2f}s) | "
                         f"ETA: {eta} | elapsed: {elapsed}"
                     )
-                    # self.print(f"  {memory_info}")  # Commented out GPU memory info
 
-                    # Print detailed timing breakdown if profiling enabled
+                    # Collect timing stats for averaging (only when profiling)
                     if self.profile_timing:
                         self.timing_stats['data_loading'].append(data_load_time)
                         self.timing_stats['total_step'].append(total_step_time)
@@ -595,41 +594,68 @@ class CTClipTrainer(nn.Module):
                             if key in self.timing_stats:
                                 self.timing_stats[key].append(value)
 
-                        # Print detailed breakdown
-                        self.print(f"  📊 Timing Breakdown:")
-                        self.print(f"     Data Loading:     {data_load_time*1000:7.2f}ms ({data_load_time/total_step_time*100:5.1f}%)")
-                        if 'data_to_device' in step_timing:
-                            self.print(f"     Data to Device:   {step_timing['data_to_device']*1000:7.2f}ms ({step_timing['data_to_device']/total_step_time*100:5.1f}%)")
-                        if 'tokenize' in step_timing:
-                            self.print(f"     Tokenize:         {step_timing['tokenize']*1000:7.2f}ms ({step_timing['tokenize']/total_step_time*100:5.1f}%)")
-                        if 'forward' in step_timing:
-                            self.print(f"     Forward Pass:     {step_timing['forward']*1000:7.2f}ms ({step_timing['forward']/total_step_time*100:5.1f}%)")
-                        if 'backward' in step_timing:
-                            self.print(f"     Backward Pass:    {step_timing['backward']*1000:7.2f}ms ({step_timing['backward']/total_step_time*100:5.1f}%)")
-                        if 'optimizer_step' in step_timing:
-                            self.print(f"     Optimizer Step:   {step_timing['optimizer_step']*1000:7.2f}ms ({step_timing['optimizer_step']/total_step_time*100:5.1f}%)")
-                        self.print(f"     ─────────────────────────────────────────")
-                        self.print(f"     Total Step Time:  {total_step_time*1000:7.2f}ms (100.0%)")
-
-                        # Print average statistics every 100 steps
+                        # Detailed breakdown every 100 steps
                         if self.global_step % 100 == 0 and len(self.timing_stats['total_step']) > 0:
-                            self.print(f"\n  📊 Average Timing (last 100 steps):")
-                            avg_data_load = np.mean(self.timing_stats['data_loading'][-100:])
+                            self.print(f"  📊 Timing Breakdown (avg last 100 steps):")
+
+                            # Calculate averages
                             avg_total = np.mean(self.timing_stats['total_step'][-100:])
+                            avg_data_load = np.mean(self.timing_stats['data_loading'][-100:])
                             avg_data_device = np.mean(self.timing_stats['data_to_device'][-100:]) if self.timing_stats['data_to_device'] else 0
                             avg_tokenize = np.mean(self.timing_stats['tokenize'][-100:]) if self.timing_stats['tokenize'] else 0
                             avg_forward = np.mean(self.timing_stats['forward'][-100:]) if self.timing_stats['forward'] else 0
                             avg_backward = np.mean(self.timing_stats['backward'][-100:]) if self.timing_stats['backward'] else 0
                             avg_optim = np.mean(self.timing_stats['optimizer_step'][-100:]) if self.timing_stats['optimizer_step'] else 0
 
-                            self.print(f"     Data Loading:     {avg_data_load*1000:7.2f}ms ({avg_data_load/avg_total*100:5.1f}%)")
-                            self.print(f"     Data to Device:   {avg_data_device*1000:7.2f}ms ({avg_data_device/avg_total*100:5.1f}%)")
-                            self.print(f"     Tokenize:         {avg_tokenize*1000:7.2f}ms ({avg_tokenize/avg_total*100:5.1f}%)")
-                            self.print(f"     Forward Pass:     {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
-                            self.print(f"     Backward Pass:    {avg_backward*1000:7.2f}ms ({avg_backward/avg_total*100:5.1f}%)")
-                            self.print(f"     Optimizer Step:   {avg_optim*1000:7.2f}ms ({avg_optim/avg_total*100:5.1f}%)")
+                            # Get CT-VIT internal timing (if available)
+                            ctvit_timing = {}
+                            try:
+                                unwrapped_model = self.accelerator.unwrap_model(self.model)
+                                if hasattr(unwrapped_model, 'visual') and hasattr(unwrapped_model.visual, 'timing_buffer'):
+                                    ctvit_timing = unwrapped_model.visual.timing_buffer.copy()
+                            except:
+                                pass
+
+                            # Data Loading breakdown
+                            self.print(f"     Data Loading:           {avg_data_load*1000:7.2f}ms ({avg_data_load/avg_total*100:5.1f}%)")
+                            if avg_data_device > 0:
+                                self.print(f"       ├─ Data to Device:    {avg_data_device*1000:7.2f}ms ({avg_data_device/avg_total*100:5.1f}%)")
+                            if avg_tokenize > 0:
+                                self.print(f"       └─ Tokenize:          {avg_tokenize*1000:7.2f}ms ({avg_tokenize/avg_total*100:5.1f}%)")
+
+                            self.print("")
+
+                            # Model Forward breakdown
+                            self.print(f"     Model Forward:          {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
+                            if ctvit_timing:
+                                spatial_time = ctvit_timing.get('spatial_transformer', 0)
+                                temporal_time = ctvit_timing.get('temporal_transformer', 0)
+                                other_time = avg_forward - spatial_time - temporal_time
+                                if spatial_time > 0:
+                                    self.print(f"       ├─ Spatial Trans:     {spatial_time*1000:7.2f}ms ({spatial_time/avg_total*100:5.1f}%)")
+                                if temporal_time > 0:
+                                    self.print(f"       ├─ Temporal Trans:    {temporal_time*1000:7.2f}ms ({temporal_time/avg_total*100:5.1f}%)")
+                                if other_time > 0:
+                                    self.print(f"       └─ Other ops:         {other_time*1000:7.2f}ms ({other_time/avg_total*100:5.1f}%)")
+
+                            self.print("")
+
+                            # Backward and Optimizer
+                            if avg_backward > 0:
+                                self.print(f"     Backward Pass:          {avg_backward*1000:7.2f}ms ({avg_backward/avg_total*100:5.1f}%)")
+                            if avg_optim > 0:
+                                self.print(f"     Optimizer Step:         {avg_optim*1000:7.2f}ms ({avg_optim/avg_total*100:5.1f}%)")
+
                             self.print(f"     ─────────────────────────────────────────")
-                            self.print(f"     Total Step Time:  {avg_total*1000:7.2f}ms (100.0%)\n")
+                            self.print(f"     Total:                  {avg_total*1000:7.2f}ms (100.0%)")
+
+                            # GPU & Memory info
+                            self.print("")
+                            self.print(f"  💾 GPU & Memory:")
+                            gpu_memory_info = get_detailed_gpu_memory_info()
+                            for info_line in gpu_memory_info:
+                                self.print(f"     {info_line}")
+                            self.print("")
 
                     # Log to logger (commented out to avoid duplicate console output)
                     # Uncomment if you need WandB logging
