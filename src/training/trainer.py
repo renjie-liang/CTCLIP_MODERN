@@ -476,22 +476,31 @@ class CTClipTrainer(nn.Module):
                 volume_tensor, report_text, disease_labels, study_id, embed_tensor = batch
                 volume_tensor = volume_tensor.to(self.device)
 
-                # Predict for each pathology
-                predicted_labels = []
+                # Batch all pathology texts together for efficient inference
+                all_texts = []
                 for pathology in self.pathologies:
-                    texts = [f"There is {pathology}.", f"There is no {pathology}."]
-                    text_tokens = self.tokenizer(
-                        texts,
-                        return_tensors="pt",
-                        padding="max_length",
-                        truncation=True,
-                        max_length=512
-                    ).to(self.device)
+                    all_texts.extend([f"There is {pathology}.", f"There is no {pathology}."])
 
-                    output = self.model(text_tokens, volume_tensor, device=self.device)
-                    output = apply_softmax(output)
+                # Single tokenization and forward pass for all pathologies
+                text_tokens = self.tokenizer(
+                    all_texts,
+                    return_tensors="pt",
+                    padding="max_length",
+                    truncation=True,
+                    max_length=512
+                ).to(self.device)
 
-                    predicted_labels.append(output[0].detach().cpu().numpy())
+                output = self.model(text_tokens, volume_tensor, device=self.device)
+
+                # Reshape output: (36,) -> (18, 2)
+                output = output.reshape(len(self.pathologies), 2)
+
+                # Apply softmax for each pathology pair (along dim=1)
+                softmax = torch.nn.Softmax(dim=1)
+                output = softmax(output)
+
+                # Take positive class (index 0: "There is {pathology}")
+                predicted_labels = output[:, 0].detach().cpu().numpy().tolist()
 
                 all_predictions.append(predicted_labels)
 
