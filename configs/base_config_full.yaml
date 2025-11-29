@@ -57,8 +57,6 @@ model:
     use_rms_norm: false         # true = RMSNorm, false = LayerNorm
     use_swiglu: false           # true = SwiGLU, false = GEGLU
 
-    profile_timing: false  # Enable detailed CTViT profiling (print timing for each component)
-
   # Text Encoder (BiomedBERT)
   text_encoder:
     type: "BiomedBERT"
@@ -135,8 +133,11 @@ logging:
 
   log_every_n_steps: 10
 
-  # Performance profiling
-  profile_timing: false  # Print detailed timing breakdown (data loading, forward, backward, optimizer)
+  # Performance profiling (detailed breakdown every 100 steps)
+  # Shows: data loading, model forward (spatial/temporal), backward, optimizer
+  # Includes: GPU memory usage and GPU utilization
+  # Auto-enables model internal profiling when true
+  profile_timing: false
 
 # Device configuration
 device:

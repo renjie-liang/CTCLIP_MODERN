@@ -118,6 +118,8 @@ class CTClipTrainer(nn.Module):
                 'optimizer_step': [],
                 'total_step': []
             }
+            # Enable model internal profiling
+            self.model.visual.profile_timing = True
 
         # Load pathology classes
         self.pathologies = self._load_pathology_classes(data_cfg['labels_valid'])

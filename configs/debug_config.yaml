@@ -47,7 +47,6 @@ model:
     temporal_depth: 4
     dim_head: 32
     heads: 8
-    profile_timing: false  # Enable detailed CTViT profiling (print timing for each component)
 
   # Text Encoder (BiomedBERT)
   text_encoder:
@@ -120,7 +119,12 @@ logging:
     log_dir: "./runs_debug"
 
   log_every_n_steps: 5    # Log every step
-  profile_timing: true  # Print detailed timing breakdown (data loading, forward, backward, optimizer)
+
+  # Performance profiling (detailed breakdown every 100 steps)
+  # Shows: data loading, model forward (spatial/temporal), backward, optimizer
+  # Includes: GPU memory usage and GPU utilization
+  # Auto-enables model internal profiling when true
+  profile_timing: true
 
 # Device configuration
 device:
