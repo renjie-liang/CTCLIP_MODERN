@@ -1,6 +1,7 @@
 import torch
 import psutil
 import os
+import subprocess
 
 
 def get_gpu_memory():
@@ -59,6 +60,41 @@ def get_system_memory():
     return f"System RAM: {used_gb:.2f}/{total_gb:.2f}GB ({percent:.1f}%)"
 
 
+def get_gpu_utilization():
+    """
+    Get GPU utilization (compute usage percentage)
+
+    Returns:
+        dict: {gpu_id: utilization_percent} or empty dict if unavailable
+    """
+    if not torch.cuda.is_available():
+        return {}
+
+    try:
+        # Use nvidia-smi to get GPU utilization
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=index,utilization.gpu', '--format=csv,noheader,nounits'],
+            capture_output=True,
+            text=True,
+            timeout=1
+        )
+
+        if result.returncode == 0:
+            utilization = {}
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    parts = line.split(',')
+                    if len(parts) == 2:
+                        gpu_id = int(parts[0].strip())
+                        util = int(parts[1].strip())
+                        utilization[gpu_id] = util
+            return utilization
+    except:
+        pass
+
+    return {}
+
+
 def get_memory_info():
     """
     Get GPU and process memory info (process-specific, not system-wide)
@@ -70,3 +106,37 @@ def get_memory_info():
     proc_mem = get_process_memory()
 
     return f"{gpu_mem} | {proc_mem}"
+
+
+def get_detailed_gpu_memory_info():
+    """
+    Get detailed GPU and memory info with utilization for profiling
+
+    Returns:
+        list: List of formatted strings for each GPU + process memory
+    """
+    if not torch.cuda.is_available():
+        return ["GPU: N/A", get_process_memory()]
+
+    device_count = torch.cuda.device_count()
+    gpu_util = get_gpu_utilization()
+    info_lines = []
+
+    for i in range(device_count):
+        # Get memory info
+        free_mem, total_mem = torch.cuda.mem_get_info(i)
+        used_mem = total_mem - free_mem
+
+        used_gb = used_mem / 1024**3
+        total_gb = total_mem / 1024**3
+        percent = (used_mem / total_mem) * 100
+
+        # Get utilization
+        util_str = f" | Util: {gpu_util[i]}%" if i in gpu_util else ""
+
+        info_lines.append(f"GPU {i}: {used_gb:.2f}/{total_gb:.2f}GB ({percent:.1f}%){util_str}")
+
+    # Add process memory
+    info_lines.append(get_process_memory())
+
+    return info_lines

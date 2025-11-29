@@ -30,7 +30,7 @@ from transformers import AutoTokenizer
 
 from ..training import get_optimizer, get_warmup_cosine_schedule
 from ..data.webdataset_loader import CTReportWebDataset
-from ..utils import ETACalculator, get_memory_info
+from ..utils import ETACalculator, get_memory_info, get_detailed_gpu_memory_info
 from ..validation import DiseaseEvaluator
 from ..checkpoint import CheckpointManager
 from ..loggers import create_logger
@@ -645,7 +645,15 @@ class CTClipTrainer(nn.Module):
                                 self.print(f"     Optimizer Step:         {avg_optim*1000:7.2f}ms ({avg_optim/avg_total*100:5.1f}%)")
 
                             self.print(f"     ─────────────────────────────────────────")
-                            self.print(f"     Total:                  {avg_total*1000:7.2f}ms (100.0%)\n")
+                            self.print(f"     Total:                  {avg_total*1000:7.2f}ms (100.0%)")
+
+                            # GPU & Memory info
+                            self.print("")
+                            self.print(f"  💾 GPU & Memory:")
+                            gpu_memory_info = get_detailed_gpu_memory_info()
+                            for info_line in gpu_memory_info:
+                                self.print(f"     {info_line}")
+                            self.print("")
 
                     # Log to logger (commented out to avoid duplicate console output)
                     # Uncomment if you need WandB logging
