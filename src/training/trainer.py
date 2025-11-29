@@ -18,6 +18,7 @@ import time
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -460,7 +461,15 @@ class CTClipTrainer(nn.Module):
         num_samples = min(num_samples, total_val_samples)
 
         with torch.no_grad():
-            for batch_idx, batch in enumerate(self.val_dataloader):
+            # Add progress bar
+            pbar = tqdm(
+                enumerate(self.val_dataloader),
+                total=num_samples,
+                desc=f"Validating",
+                disable=not self.is_main
+            )
+
+            for batch_idx, batch in pbar:
                 if batch_idx >= num_samples:
                     break
 
@@ -492,6 +501,9 @@ class CTClipTrainer(nn.Module):
                 else:
                     # Already numpy array from WebDataset
                     all_labels.append(disease_labels[0])
+
+                # Update progress bar
+                pbar.set_postfix({'samples': f'{batch_idx+1}/{num_samples}'})
 
         # Convert to numpy arrays
         all_labels = np.array(all_labels)
