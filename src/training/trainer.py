@@ -4,7 +4,7 @@ Step-based CT-CLIP Trainer
 Key features:
 - Step-based training (not epoch-based)
 - Warmup + Cosine LR scheduling
-- Multi-GPU support via Accelerator
+- Single-GPU training with PyTorch AMP
 - Time estimation and progress tracking
 - Partial validation for speed
 """
@@ -22,10 +22,6 @@ from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
-
-from accelerate import Accelerator
-from accelerate import DistributedDataParallelKwargs
-from accelerate.utils import InitProcessGroupKwargs
 
 from transformers import AutoTokenizer
 
@@ -84,13 +80,16 @@ class CTClipTrainer(nn.Module):
         self.results_folder = Path(checkpoint_cfg['save_dir'])
         self.results_folder.mkdir(parents=True, exist_ok=True)
 
-        # Initialize Accelerator with mixed precision training
-        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-        init_kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=36000))
-        self.accelerator = Accelerator(
-            kwargs_handlers=[ddp_kwargs, init_kwargs],
-            mixed_precision='fp16'  # Enable automatic mixed precision (AMP)
-        )
+        # Device setup (single GPU)
+        device_cfg = config.get('device', {})
+        if device_cfg.get('use_cuda', True) and torch.cuda.is_available():
+            self.device = torch.device(f"cuda:{device_cfg.get('cuda_device', 0)}")
+        else:
+            self.device = torch.device('cpu')
+
+        # Mixed precision scaler for AMP
+        self.use_amp = True  # Enable automatic mixed precision
+        self.scaler = torch.cuda.amp.GradScaler() if self.use_amp else None
 
         # Tokenizer
         text_cfg = config['model']['text_encoder']
@@ -204,8 +203,7 @@ class CTClipTrainer(nn.Module):
             save_every_n_epochs = training_cfg.get('save_every_n_epochs', 1.0)
             self.save_every_n_steps = int(save_every_n_epochs * self.steps_per_epoch)
 
-        # Device
-        self.device = self.accelerator.device
+        # Move model to device
         self.model.to(self.device)
 
         # Optimizer
@@ -220,17 +218,11 @@ class CTClipTrainer(nn.Module):
             min_lr_ratio=self.min_lr_ratio
         )
 
-        # Prepare model, optimizer, scheduler (skip dataloaders to preserve custom collate_fn)
-        self.model, self.optim, self.scheduler = self.accelerator.prepare(
-            self.model, self.optim, self.scheduler
-        )
-
-        # Enable model internal profiling (MUST be after prepare() to access the actual model)
+        # Enable model internal profiling
         if self.profile_timing:
-            unwrapped_model = self.accelerator.unwrap_model(self.model)
-            unwrapped_model.profile_timing = True
-            if hasattr(unwrapped_model, 'visual_transformer'):
-                unwrapped_model.visual_transformer.profile_timing = True
+            self.model.profile_timing = True
+            if hasattr(self.model, 'visual_transformer'):
+                self.model.visual_transformer.profile_timing = True
             self.print("✅ Model profiling enabled")
 
         # Initialize components
@@ -297,15 +289,10 @@ class CTClipTrainer(nn.Module):
 
     def save_checkpoint(self, metrics: Dict):
         """Save checkpoint"""
-        if not self.accelerator.is_local_main_process:
-            return
-
-        unwrapped_model = self.accelerator.unwrap_model(self.model)
-
         save_path = self.checkpoint_manager.save_checkpoint(
             epoch=self.current_epoch,
             global_step=self.global_step,
-            model=unwrapped_model,
+            model=self.model,
             optimizer=self.optim,
             scheduler=self.scheduler,
             metrics=metrics,
@@ -324,10 +311,9 @@ class CTClipTrainer(nn.Module):
         """Load checkpoint"""
         path = Path(path)
 
-        unwrapped_model = self.accelerator.unwrap_model(self.model)
         checkpoint = self.checkpoint_manager.load_checkpoint(
             str(path),
-            model=unwrapped_model,
+            model=self.model,
             optimizer=self.optim,
             scheduler=self.scheduler
         )
@@ -339,13 +325,13 @@ class CTClipTrainer(nn.Module):
         self.print(f"✅ Resumed from step {self.global_step}, epoch {self.current_epoch}")
 
     def print(self, msg):
-        """Print on main process only"""
-        self.accelerator.print(msg)
+        """Print message"""
+        print(msg)
 
     @property
     def is_main(self):
-        """Check if main process"""
-        return self.accelerator.is_main_process
+        """Check if main process (always True for single GPU)"""
+        return True
 
     def train_step(self, batch, batch_idx: int) -> Dict:
         """
@@ -396,7 +382,11 @@ class CTClipTrainer(nn.Module):
             torch.cuda.synchronize()
             t0 = time.time()
 
-        with self.accelerator.autocast():
+        if self.use_amp:
+            with torch.cuda.amp.autocast():
+                loss = self.model(text_tokens, volume_tensor, return_loss=True, device=device)
+                loss = loss / self.gradient_accumulation_steps
+        else:
             loss = self.model(text_tokens, volume_tensor, return_loss=True, device=device)
             loss = loss / self.gradient_accumulation_steps
 
@@ -409,7 +399,10 @@ class CTClipTrainer(nn.Module):
             torch.cuda.synchronize()
             t0 = time.time()
 
-        self.accelerator.backward(loss)
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         if self.profile_timing:
             torch.cuda.synchronize()
@@ -421,10 +414,19 @@ class CTClipTrainer(nn.Module):
                 torch.cuda.synchronize()
                 t0 = time.time()
 
-            if self.max_grad_norm:
-                self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            if self.use_amp:
+                # Unscale before gradient clipping
+                if self.max_grad_norm:
+                    self.scaler.unscale_(self.optim)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
-            self.optim.step()
+                self.scaler.step(self.optim)
+                self.scaler.update()
+            else:
+                if self.max_grad_norm:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                self.optim.step()
+
             self.scheduler.step()
             self.optim.zero_grad()
 
@@ -637,9 +639,8 @@ class CTClipTrainer(nn.Module):
                             # Get CT-CLIP internal timing (if available)
                             model_timing = {}
                             try:
-                                unwrapped_model = self.accelerator.unwrap_model(self.model)
-                                if hasattr(unwrapped_model, 'timing_buffer'):
-                                    model_timing = unwrapped_model.timing_buffer.copy()
+                                if hasattr(self.model, 'timing_buffer'):
+                                    model_timing = self.model.timing_buffer.copy()
                             except:
                                 pass
 
