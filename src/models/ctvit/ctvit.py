@@ -486,7 +486,8 @@ class CTViT(nn.Module):
                 torch.cuda.synchronize()
                 total_time = time.time() - forward_start
                 self.timing_buffer['total_forward'] = total_time
-                self._print_timing_stats()
+                # Timing stats will be printed by trainer every 100 steps
+                # self._print_timing_stats()
             return tokens
 
         # ===== 4. Decode (Temporal -> Spatial -> Pixels) =====
