@@ -3,8 +3,8 @@
 
 # Experiment information
 experiment:
-  name: "ct-clip-baseline"
-  tags: ["baseline", "ctclip"]
+  name: "ctclip_optimized_full"
+  tags: ["optimized", "flash_attention", "rms_norm", "swiglu"]
   seed: 2025
   notes: "Step-based training configuration"
 
@@ -53,9 +53,9 @@ model:
     heads: 8
 
     # Optimization flags (for ablation studies)
-    use_flash_attention: false  # true = FlashAttention, false = baseline Attention
-    use_rms_norm: false         # true = RMSNorm, false = LayerNorm
-    use_swiglu: false           # true = SwiGLU, false = GEGLU
+    use_flash_attention: true  # true = FlashAttention, false = baseline Attention
+    use_rms_norm: true         # true = RMSNorm, false = LayerNorm
+    use_swiglu: true           # true = SwiGLU, false = GEGLU
 
   # Text Encoder (BiomedBERT)
   text_encoder:
@@ -109,7 +109,7 @@ validation:
 
 # Checkpoint configuration
 checkpoint:
-  save_dir: "./saves/baseline"
+  save_dir: "saves/optimized_full"
   keep_last_n: 3
   save_best: true
   best_metric: "auroc"
@@ -119,10 +119,9 @@ checkpoint:
 logging:
   use_wandb: true
   use_tensorboard: false
-  use_console: true
 
   wandb:
-    project: "ct-clip"
+    project: "ctclip_ablation"
     entity: null
     mode: "online"
     group: null
