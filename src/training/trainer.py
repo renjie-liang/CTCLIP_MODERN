@@ -11,7 +11,7 @@ Key features:
 
 import sys
 from pathlib import Path
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Dict, List
 import time
 
@@ -586,8 +586,9 @@ class CTClipTrainer(nn.Module):
                         display_data_time = 0
                         model_time = avg_step_time
 
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     self.print(
-                        f"Ep {current_epoch_float:.2f} | Step {self.global_step}/{self.max_steps} | "
+                        f"[{timestamp}] Ep {current_epoch_float:.2f} | Step {self.global_step}/{self.max_steps} | "
                         f"loss: {loss:.4f} | lr: {current_lr:.2e} | "
                         f"time: {display_total_time:.2f}s (data: {display_data_time:.2f}s, model: {model_time:.2f}s) | "
                         f"ETA: {eta} | elapsed: {elapsed}"
