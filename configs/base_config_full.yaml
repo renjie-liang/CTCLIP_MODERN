@@ -137,7 +137,7 @@ logging:
   # Shows: data loading, model forward (spatial/temporal), backward, optimizer
   # Includes: GPU memory usage and GPU utilization
   # Auto-enables model internal profiling when true
-  profile_timing: false
+  profile_timing: true
 
 # Device configuration
 device:
