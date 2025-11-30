@@ -104,6 +104,14 @@ class CTClipTrainer(nn.Module):
             trust_remote_code=True
         )
 
+        # Model selection metric
+        self.best_metric = checkpoint_cfg.get('best_metric', 'weighted_auroc')
+        # Validate best_metric
+        valid_metrics = ['weighted_auroc', 'macro_auroc']
+        if self.best_metric not in valid_metrics:
+            raise ValueError(f"Invalid best_metric '{self.best_metric}'. Must be one of {valid_metrics}")
+        self.print(f"Model selection metric: {self.best_metric}")
+
         # Training state
         self.global_step = 0
         self.current_epoch = 0
@@ -306,11 +314,11 @@ class CTClipTrainer(nn.Module):
 
         self.print(f'✓ Checkpoint saved: {save_path}')
 
-        # Check if best (using weighted AUROC for model selection)
-        current_auroc = metrics.get('weighted_auroc', 0.0)
+        # Check if best (using configured best_metric for model selection)
+        current_auroc = metrics.get(self.best_metric, 0.0)
         if current_auroc > self.best_auroc:
             self.best_auroc = current_auroc
-            self.print(f'✅ New best model! Weighted AUROC: {self.best_auroc:.4f}')
+            self.print(f'✅ New best model! {self.best_metric}: {self.best_auroc:.4f}')
 
     def load_checkpoint(self, path: str):
         """Load checkpoint"""
@@ -325,7 +333,7 @@ class CTClipTrainer(nn.Module):
 
         self.global_step = checkpoint.get('global_step', 0)
         self.current_epoch = checkpoint['epoch']
-        self.best_auroc = checkpoint.get('metrics', {}).get('weighted_auroc', 0.0)
+        self.best_auroc = checkpoint.get('metrics', {}).get(self.best_metric, 0.0)
 
         self.print(f"✅ Resumed from step {self.global_step}, epoch {self.current_epoch}")
 
@@ -521,17 +529,25 @@ class CTClipTrainer(nn.Module):
         self.print(f"\n{'='*80}")
         self.print(f"Validation Results (Step {self.global_step}, {num_samples} samples)")
         self.print(f"{'='*80}")
-        self.print(f"Macro AUROC: {results['macro_auroc']:.4f}")
+
+        # Macro metrics
+        macro_auroc_star = " ⭐" if self.best_metric == 'macro_auroc' else ""
+        self.print(f"Macro AUROC: {results['macro_auroc']:.4f}{macro_auroc_star}")
         if 'macro_auprc' in results:
             self.print(f"Macro AUPRC: {results['macro_auprc']:.4f}")
         if 'macro_f1' in results:
             self.print(f"Macro F1: {results['macro_f1']:.4f}")
+
         self.print(f"---")
-        self.print(f"Weighted AUROC: {results['weighted_auroc']:.4f} ⭐")
+
+        # Weighted metrics
+        weighted_auroc_star = " ⭐" if self.best_metric == 'weighted_auroc' else ""
+        self.print(f"Weighted AUROC: {results['weighted_auroc']:.4f}{weighted_auroc_star}")
         if 'weighted_auprc' in results:
             self.print(f"Weighted AUPRC: {results['weighted_auprc']:.4f}")
         if 'weighted_f1' in results:
             self.print(f"Weighted F1: {results['weighted_f1']:.4f}")
+
         self.print(f"{'='*80}\n")
 
         # Log metrics
@@ -776,7 +792,7 @@ class CTClipTrainer(nn.Module):
                 if metrics:
                     self.save_checkpoint(metrics)
             elif self.global_step > 0 and self.global_step % self.save_every_n_steps == 0:
-                metrics = {'weighted_auroc': self.best_auroc}
+                metrics = {self.best_metric: self.best_auroc}
                 self.save_checkpoint(metrics)
 
         # 训练结束，最后一次验证 + 保存
@@ -787,7 +803,7 @@ class CTClipTrainer(nn.Module):
         if metrics:
             self.save_checkpoint(metrics)
 
-        self.print(f"\nBest Weighted AUROC: {self.best_auroc:.4f}")
+        self.print(f"\nBest {self.best_metric}: {self.best_auroc:.4f}")
         self.print(f"Results saved to: {self.results_folder}\n")
 
         self.logger.finish()
