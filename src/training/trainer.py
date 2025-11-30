@@ -280,9 +280,9 @@ class CTClipTrainer(nn.Module):
         # Log hyperparameters
         self.logger.log_hyperparameters(config)
 
-        # # Monitor model (WandB) - Commented out to reduce overhead
+        # # Monitor model (WandB)
         # if config['logging'].get('use_wandb', False):
-        #     log_freq = config['logging'].get('log_every_n_steps', 100)
+        #     log_freq = config['logging'].get('log_every_n_steps', 1000)
         #     self.logger.watch_model(self.model, log_freq=log_freq)
 
     def _load_pathology_classes(self, labels_path: str) -> List[str]:
@@ -338,7 +338,7 @@ class CTClipTrainer(nn.Module):
         """Check if main process (always True for single GPU)"""
         return True
 
-    def train_step(self, batch, batch_idx: int) -> Dict:
+    def train_step(self, dataloader_iter, batch_idx: int) -> Dict:
         """
         Execute one training step
 
@@ -352,22 +352,20 @@ class CTClipTrainer(nn.Module):
         timing = {}
         device = self.device
 
-        # Unpack batch and move to device
         if self.profile_timing:
             torch.cuda.synchronize()
-            t0 = time.time()
+        t0 = time.time()
+
+        batch = next(dataloader_iter)
+
+        t1 = time.time()
+        timing['data_loading'] = t1 - t0
 
         volume_tensor, report_text, disease_labels, study_id, embed_tensor = batch
         volume_tensor = volume_tensor.to(device, non_blocking=True)
 
-        if self.profile_timing:
-            torch.cuda.synchronize()
-            timing['data_to_device'] = time.time() - t0
-
-        # Tokenize text
-        if self.profile_timing:
-            torch.cuda.synchronize()
-            t0 = time.time()
+        t2 = time.time()
+        timing['data_to_device'] = t2 - t1
 
         report_text = list(report_text)
         text_tokens = self.tokenizer(
@@ -377,73 +375,56 @@ class CTClipTrainer(nn.Module):
             truncation=True,
             max_length=512
         ).to(device, non_blocking=True)
-
+        
         if self.profile_timing:
             torch.cuda.synchronize()
-            timing['tokenize'] = time.time() - t0
-
-        # Forward pass with automatic mixed precision (float32 inputs → float16 computation)
-        if self.profile_timing:
-            torch.cuda.synchronize()
-            t0 = time.time()
+        t3 = time.time()
+        timing['tokenize'] = t3 - t2
 
         if self.use_amp:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 loss = self.model(text_tokens, volume_tensor, return_loss=True, device=device)
-                # Scale loss by gradient_accumulation_steps for proper averaging
-                loss = loss / self.gradient_accumulation_steps
         else:
             loss = self.model(text_tokens, volume_tensor, return_loss=True, device=device)
-            # Scale loss by gradient_accumulation_steps for proper averaging
-            loss = loss / self.gradient_accumulation_steps
 
         if self.profile_timing:
             torch.cuda.synchronize()
-            timing['forward'] = time.time() - t0
-
-        # Backward pass
-        if self.profile_timing:
-            torch.cuda.synchronize()
-            t0 = time.time()
+        t4 = time.time()
+        timing['forward'] = t4 - t3
 
         if self.use_amp:
             self.scaler.scale(loss).backward()
         else:
             loss.backward()
 
-        if self.profile_timing:
+        if self.profile_timing: 
             torch.cuda.synchronize()
-            timing['backward'] = time.time() - t0
+        t5 = time.time()
+        timing['backward'] = t5 - t4
 
-        # Update weights only after accumulating gradients for N steps
-        # Example: if gradient_accumulation_steps=4, update at batch_idx=3,7,11,...
-        if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
-            if self.profile_timing:
-                torch.cuda.synchronize()
-                t0 = time.time()
+    # Update weights after accumulation
+        if self.use_amp:
+            # Unscale before gradient clipping
+            if self.max_grad_norm:
+                self.scaler.unscale_(self.optim)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
-            if self.use_amp:
-                # Unscale before gradient clipping
-                if self.max_grad_norm:
-                    self.scaler.unscale_(self.optim)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.scaler.step(self.optim)
+            self.scaler.update()
+        else:
+            if self.max_grad_norm:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.optim.step()
 
-                self.scaler.step(self.optim)
-                self.scaler.update()
-            else:
-                if self.max_grad_norm:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                self.optim.step()
+        self.scheduler.step()
+        self.optim.zero_grad()
 
-            self.scheduler.step()
-            self.optim.zero_grad()
 
-            if self.profile_timing:
-                torch.cuda.synchronize()
-                timing['optimizer_step'] = time.time() - t0
-
-            self.global_step += 1
-            self.eta_calculator.update()
+        self.global_step += 1
+        self.eta_calculator.update()
+        
+        t6 = time.time()
+        timing['optimizer_step'] = t6 - t5
 
         return {
             'loss': loss.item() * self.gradient_accumulation_steps,
@@ -555,11 +536,11 @@ class CTClipTrainer(nn.Module):
         self.logger.log_metrics(results, step=self.global_step, prefix='val')
 
         return results
-
+        
     def train(self):
-        """Main training loop (step-based)"""
+        """Main training loop (step-based, no gradient accumulation)."""
         self.print(f"\n{'='*80}")
-        self.print(f"Starting Training")
+        self.print("Starting Training")
         self.print(f"{'='*80}\n")
 
         epoch = 0
@@ -568,274 +549,237 @@ class CTClipTrainer(nn.Module):
         # Global batch index for gradient accumulation (never resets)
         global_batch_idx = 0
 
+        log_every = self.config['logging'].get('log_every_n_steps', 10)
+
         while self.global_step < self.max_steps:
             self.model.train()
-
-            # Get next batch (measure TOTAL step time including data loading)
-            # Always record time (minimal overhead), but only sync GPU if profiling
+            # 整个 step 计时（含数据加载 + GPU 计算）
             if self.profile_timing:
-                torch.cuda.synchronize()  # Only sync when profiling (expensive)
-            step_start = time.time()  # Start timing BEFORE data loading
-            data_load_start = time.time()
+                torch.cuda.synchronize()
+            step_start = time.time()
 
+            # 一个 step：内部会 next(dataloader_iter)
             try:
-                batch = next(dataloader_iter)
+                result = self.train_step(dataloader_iter, batch_idx_in_epoch)
             except StopIteration:
-                # New epoch
+                # 一个 epoch 结束，重置 dataloader
                 epoch += 1
                 self.current_epoch = epoch
-                dataloader_iter = iter(self.train_dataloader)
-                batch = next(dataloader_iter)
-                batch_idx_in_epoch = 0
                 self.print(f"\n--- Epoch {epoch} ---")
+                dataloader_iter = iter(self.train_dataloader)
+                batch_idx_in_epoch = 0
+                result = self.train_step(dataloader_iter, batch_idx_in_epoch)
 
-            # Record data loading time (always, minimal overhead)
-            data_load_time = time.time() - data_load_start
-
-            # Training step (use global_batch_idx for gradient accumulation)
-            result = self.train_step(batch, global_batch_idx)
             loss = result['loss']
             step_timing = result['timing']
             batch_idx_in_epoch += 1
             global_batch_idx += 1
 
-            # Calculate total step time (always)
-            # Only sync GPU when profiling for precise timing
             if self.profile_timing:
-                torch.cuda.synchronize()  # Precise GPU timing (expensive)
-            total_step_time = time.time() - step_start  # Total = data loading + GPU ops
+                torch.cuda.synchronize()
+            total_step_time = time.time() - step_start
 
-            # Log every N steps (after accumulation completes)
-            # Only log after optimizer.step() has been called
-            if (global_batch_idx + 1) % self.gradient_accumulation_steps == 0:
-                current_lr = self.optim.param_groups[0]['lr']
-                current_epoch_float = self.global_step / self.steps_per_epoch
-                avg_step_time = self.eta_calculator.get_avg_step_time()
-                eta = self.eta_calculator.get_eta(self.global_step, self.max_steps)
-                elapsed = self.eta_calculator.get_elapsed_time()
+            # Data 阶段时间
+            data_load_time = step_timing['data_loading']
+            model_time = total_step_time - data_load_time
 
-                if self.global_step % 10 == 0:
-                    # Calculate model time (total - data loading)
-                    model_time = total_step_time - data_load_time
+            # ETA / 进度信息
+            avg_step_time = self.eta_calculator.get_avg_step_time()
+            eta = self.eta_calculator.get_eta(self.global_step, self.max_steps)
+            elapsed = self.eta_calculator.get_elapsed_time()
+            current_lr = self.optim.param_groups[0]['lr']
+            current_epoch_float = self.global_step / max(1, self.steps_per_epoch)
 
-                    # Simple one-line log (always shown)
-                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    self.print(
-                        f"[{timestamp}] Ep {current_epoch_float:.2f} | Step {self.global_step}/{self.max_steps} | "
-                        f"loss: {loss:.4f} | lr: {current_lr:.2e} | "
-                        f"time: {total_step_time:.2f}s (data: {data_load_time:.2f}s, model: {model_time:.2f}s) | "
-                        f"ETA: {eta} | elapsed: {elapsed}"
+            # 简单一行 log
+            if self.global_step % log_every == 0 or self.global_step == 1:
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                self.print(
+                    f"[{timestamp}] Ep {current_epoch_float:.2f} | "
+                    f"Step {self.global_step}/{self.max_steps} | "
+                    f"loss: {loss:.4f} | lr: {current_lr:.2e} | "
+                    f"time: {total_step_time:.2f}s (data: {data_load_time:.2f}s, model: {model_time:.2f}s) | "
+                    f"ETA: {eta} | elapsed: {elapsed}"
+                )
+
+
+
+
+            # 累积 timing 统计 & 打详细 breakdown
+            if self.profile_timing:
+                # 假设 train_step 永远填好了这些 key（即使是 0）
+                self.timing_stats['total_step'].append(total_step_time)
+                self.timing_stats['data_loading'].append(step_timing['data_loading'])
+                self.timing_stats['data_to_device'].append(step_timing['data_to_device'])
+                self.timing_stats['tokenize'].append(step_timing['tokenize'])
+                self.timing_stats['forward'].append(step_timing['forward'])
+                self.timing_stats['backward'].append(step_timing['backward'])
+                self.timing_stats['optimizer_step'].append(step_timing['optimizer_step'])
+
+                # 每 100 step 打一次详细统计
+                if self.global_step > 0 and self.global_step % 100 == 0 and self.timing_stats['total_step']:
+                    self.print(f"  📊 Timing Breakdown (avg last 100 steps):")
+
+                    # 最近 100 个 step
+                    window = 100
+                    avg_total        = float(np.mean(self.timing_stats['total_step'][-window:]))
+                    avg_data_load    = float(np.mean(self.timing_stats['data_loading'][-window:]))
+                    avg_data_device  = float(np.mean(self.timing_stats['data_to_device'][-window:]))
+                    avg_tokenize     = float(np.mean(self.timing_stats['tokenize'][-window:]))
+                    avg_forward_ext  = float(np.mean(self.timing_stats['forward'][-window:]))
+                    avg_backward     = float(np.mean(self.timing_stats['backward'][-window:]))
+                    avg_optim        = float(np.mean(self.timing_stats['optimizer_step'][-window:]))
+
+                    pct = lambda x: (x / avg_total * 100.0) if avg_total > 0 else 0.0
+
+                    # Data Stage
+                    self.print("  ⏱ Data Stage:")
+                    self.print(f"     ├─ Data Loading:        {avg_data_load*1000:7.2f}ms ({pct(avg_data_load):5.1f}%)")
+                    self.print(f"     ├─ Data to Device:      {avg_data_device*1000:7.2f}ms ({pct(avg_data_device):5.1f}%)")
+                    self.print(f"     └─ Tokenize:            {avg_tokenize*1000:7.2f}ms ({pct(avg_tokenize):5.1f}%)")
+                    self.print("")
+
+                    # Model Forward：外层计时 vs 模型内部计时
+                    model_timing   = self.model.timing_buffer
+                    internal_total = model_timing.get('total_forward', -1.0)
+                    forward_diff   = avg_forward_ext - internal_total
+
+                    self.print("  ⏱ Model Forward Summary:")
+                    self.print(f"     ├─ Trainer avg forward: {avg_forward_ext*1000:7.2f}ms")
+                    self.print(f"     ├─ Internal total:      {internal_total*1000:7.2f}ms")
+                    self.print(f"     └─ Δ(outer - inner):    {forward_diff*1000:7.2f}ms")
+                    self.print("")
+
+                    # 下面用 internal_total 做分母算占比
+                    forward_total = internal_total
+                    pct_f = lambda x: (x / forward_total * 100.0) if forward_total > 0 else 0.0
+
+                    self.print(f"  ⏱ Model Forward Breakdown (internal):")
+                    self.print(f"     Total Forward:          {forward_total*1000:7.2f}ms (100.0%)")
+
+                    ssl_time        = model_timing.get('ssl', 0.0)
+                    data_aug_time   = model_timing.get('data_augmentation', 0.0)
+                    text_enc_time   = model_timing.get('text_encoder', 0.0)
+                    text_post_time  = model_timing.get('text_postprocess', 0.0)
+                    visual_enc_time = model_timing.get('visual_encoder', 0.0)
+                    image_pool_time = model_timing.get('image_pooling', 0.0)
+                    embed_sel_time  = model_timing.get('embed_selection', 0.0)
+                    proj_time       = model_timing.get('projection', 0.0)
+                    similarity_time = model_timing.get('similarity_computation', 0.0)
+                    loss_comp_time  = model_timing.get('loss_computation', 0.0)
+                    ctvit_detail    = model_timing.get('ctvit_detail', {})
+
+                    used_time = (
+                        ssl_time + data_aug_time + text_enc_time + text_post_time +
+                        visual_enc_time + image_pool_time + embed_sel_time +
+                        proj_time + similarity_time + loss_comp_time
                     )
+                    other_time = max(0.0, forward_total - used_time)
 
-                    # Collect timing stats for averaging (only when profiling)
-                    if self.profile_timing:
-                        self.timing_stats['data_loading'].append(data_load_time)
-                        self.timing_stats['total_step'].append(total_step_time)
-                        for key, value in step_timing.items():
-                            if key in self.timing_stats:
-                                self.timing_stats[key].append(value)
+                    if ssl_time > 0:
+                        self.print(f"     ├─ SSL (MLM/VisSSL):    {ssl_time*1000:7.2f}ms ({pct_f(ssl_time):5.1f}%)")
+                    if data_aug_time > 0:
+                        self.print(f"     ├─ Data Augmentation:   {data_aug_time*1000:7.2f}ms ({pct_f(data_aug_time):5.1f}%)")
+                    if text_enc_time > 0:
+                        self.print(f"     ├─ Text Encoder:        {text_enc_time*1000:7.2f}ms ({pct_f(text_enc_time):5.1f}%)  [BiomedVLP-BERT]")
+                    if text_post_time > 0:
+                        self.print(f"     ├─ Text Postprocess:    {text_post_time*1000:7.2f}ms ({pct_f(text_post_time):5.1f}%)")
 
-                        # Detailed breakdown every 100 steps
-                        if self.global_step % 100 == 0 and len(self.timing_stats['total_step']) > 0:
-                            self.print(f"  📊 Timing Breakdown (avg last 100 steps):")
+                    # Visual encoder + CTViT 细分
+                    if visual_enc_time > 0:
+                        self.print(f"     ├─ Visual Encoder:      {visual_enc_time*1000:7.2f}ms ({pct_f(visual_enc_time):5.1f}%)  [CT-VIT]")
 
-                            # Calculate averages
-                            avg_total = np.mean(self.timing_stats['total_step'][-100:])
-                            avg_data_load = np.mean(self.timing_stats['data_loading'][-100:])
-                            avg_data_device = np.mean(self.timing_stats['data_to_device'][-100:]) if self.timing_stats['data_to_device'] else 0
-                            avg_tokenize = np.mean(self.timing_stats['tokenize'][-100:]) if self.timing_stats['tokenize'] else 0
-                            avg_forward = np.mean(self.timing_stats['forward'][-100:]) if self.timing_stats['forward'] else 0
-                            avg_backward = np.mean(self.timing_stats['backward'][-100:]) if self.timing_stats['backward'] else 0
-                            avg_optim = np.mean(self.timing_stats['optimizer_step'][-100:]) if self.timing_stats['optimizer_step'] else 0
+                        spatial_data  = ctvit_detail.get('spatial_transformer')
+                        temporal_data = ctvit_detail.get('temporal_transformer')
 
-                            # Get CT-CLIP internal timing (if available)
-                            model_timing = {}
-                            try:
-                                if hasattr(self.model, 'timing_buffer'):
-                                    model_timing = self.model.timing_buffer.copy()
-                            except:
-                                pass
+                        def _to_total(x):
+                            if isinstance(x, dict):
+                                return x.get('total', 0.0)
+                            return x or 0.0
 
-                            # Data Loading breakdown
-                            self.print(f"     Data Loading:           {avg_data_load*1000:7.2f}ms ({avg_data_load/avg_total*100:5.1f}%)")
-                            if avg_data_device > 0:
-                                self.print(f"       ├─ Data to Device:    {avg_data_device*1000:7.2f}ms ({avg_data_device/avg_total*100:5.1f}%)")
-                            if avg_tokenize > 0:
-                                self.print(f"       └─ Tokenize:          {avg_tokenize*1000:7.2f}ms ({avg_tokenize/avg_total*100:5.1f}%)")
+                        spatial_time  = _to_total(spatial_data)
+                        temporal_time = _to_total(temporal_data)
 
-                            self.print("")
+                        if spatial_time > 0:
+                            self.print(f"     │   ├─ Spatial Trans:       {spatial_time*1000:7.2f}ms ({(spatial_time/visual_enc_time*100.0):5.1f}%)")
+                            if isinstance(spatial_data, dict):
+                                attn_time  = spatial_data.get('attention', 0.0)
+                                ff_time    = spatial_data.get('feedforward', 0.0)
+                                norm_time  = spatial_data.get('norm', 0.0)
+                                labels     = spatial_data.get('labels', {})
 
-                            # Model Forward breakdown (CT-CLIP)
-                            self.print(f"     Model Forward:          {avg_forward*1000:7.2f}ms ({avg_forward/avg_total*100:5.1f}%)")
-                            if model_timing:
-                                ssl_time = model_timing.get('ssl', 0)
-                                data_aug_time = model_timing.get('data_augmentation', 0)
-                                text_enc_time = model_timing.get('text_encoder', 0)
-                                text_post_time = model_timing.get('text_postprocess', 0)
-                                visual_enc_time = model_timing.get('visual_encoder', 0)
-                                image_pool_time = model_timing.get('image_pooling', 0)
-                                embed_sel_time = model_timing.get('embed_selection', 0)
-                                proj_time = model_timing.get('projection', 0)
-                                similarity_time = model_timing.get('similarity_computation', 0)
-                                loss_comp_time = model_timing.get('loss_computation', 0)
-                                ctvit_detail = model_timing.get('ctvit_detail', {})
+                                if attn_time > 0:
+                                    attn_label = labels.get('attention', 'Attention')
+                                    self.print(f"     │   │   ├─ Attention:       {attn_time*1000:7.2f}ms ({(attn_time/spatial_time*100.0):5.1f}%)  [{attn_label}]")
+                                if ff_time > 0:
+                                    ff_label = labels.get('feedforward', 'FFN')
+                                    self.print(f"     │   │   ├─ Feed-Forward:    {ff_time*1000:7.2f}ms ({(ff_time/spatial_time*100.0):5.1f}%)  [{ff_label}]")
+                                if norm_time > 0:
+                                    norm_label = labels.get('norm', 'Norm')
+                                    self.print(f"     │   │   └─ Normalization:   {norm_time*1000:7.2f}ms ({(norm_time/spatial_time*100.0):5.1f}%)  [{norm_label}]")
 
-                                other_time = avg_forward - ssl_time - data_aug_time - text_enc_time - text_post_time - visual_enc_time - image_pool_time - embed_sel_time - proj_time - similarity_time - loss_comp_time
+                        if temporal_time > 0:
+                            self.print(f"     │   └─ Temporal Trans:      {temporal_time*1000:7.2f}ms ({(temporal_time/visual_enc_time*100.0):5.1f}%)")
+                            if isinstance(temporal_data, dict):
+                                attn_time  = temporal_data.get('attention', 0.0)
+                                ff_time    = temporal_data.get('feedforward', 0.0)
+                                norm_time  = temporal_data.get('norm', 0.0)
+                                labels     = temporal_data.get('labels', {})
 
-                                # SSL (MLM + Visual SSL)
-                                if ssl_time > 0:
-                                    self.print(f"       ├─ SSL (MLM/VisSSL):  {ssl_time*1000:7.2f}ms ({ssl_time/avg_forward*100:5.1f}%)")
+                                if attn_time > 0:
+                                    attn_label = labels.get('attention', 'Attention')
+                                    self.print(f"     │       ├─ Attention:       {attn_time*1000:7.2f}ms ({(attn_time/temporal_time*100.0):5.1f}%)  [{attn_label}]")
+                                if ff_time > 0:
+                                    ff_label = labels.get('feedforward', 'FFN')
+                                    self.print(f"     │       ├─ Feed-Forward:    {ff_time*1000:7.2f}ms ({(ff_time/temporal_time*100.0):5.1f}%)  [{ff_label}]")
+                                if norm_time > 0:
+                                    norm_label = labels.get('norm', 'Norm')
+                                    self.print(f"     │       └─ Normalization:   {norm_time*1000:7.2f}ms ({(norm_time/temporal_time*100.0):5.1f}%)  [{norm_label}]")
 
-                                # Data Augmentation
-                                if data_aug_time > 0:
-                                    self.print(f"       ├─ Data Augmentation: {data_aug_time*1000:7.2f}ms ({data_aug_time/avg_forward*100:5.1f}%)")
+                    if image_pool_time > 0:
+                        self.print(f"     ├─ Image Pooling:       {image_pool_time*1000:7.2f}ms ({pct_f(image_pool_time):5.1f}%)")
+                    if embed_sel_time > 0:
+                        self.print(f"     ├─ Embed Selection:     {embed_sel_time*1000:7.2f}ms ({pct_f(embed_sel_time):5.1f}%)")
+                    if proj_time > 0:
+                        self.print(f"     ├─ Projection:          {proj_time*1000:7.2f}ms ({pct_f(proj_time):5.1f}%)")
+                    if similarity_time > 0:
+                        self.print(f"     ├─ Similarity Compute:  {similarity_time*1000:7.2f}ms ({pct_f(similarity_time):5.1f}%)  [einsum]")
+                    if loss_comp_time > 0:
+                        self.print(f"     ├─ Loss Computation:    {loss_comp_time*1000:7.2f}ms ({pct_f(loss_comp_time):5.1f}%)")
+                    if other_time > 0:
+                        self.print(f"     └─ Other ops:           {other_time*1000:7.2f}ms ({pct_f(other_time):5.1f}%)")
 
-                                # Text Encoder
-                                if text_enc_time > 0:
-                                    self.print(f"       ├─ Text Encoder:      {text_enc_time*1000:7.2f}ms ({text_enc_time/avg_forward*100:5.1f}%)  [BiomedVLP-BERT]")
+                    self.print("")
+                    # Backward & Optimizer
+                    self.print(f"  ⏱ Backward & Optimizer:")
+                    if avg_backward > 0:
+                        self.print(f"     ├─ Backward Pass:       {avg_backward*1000:7.2f}ms ({pct(avg_backward):5.1f}%)")
+                    if avg_optim > 0:
+                        self.print(f"     └─ Optimizer Step:      {avg_optim*1000:7.2f}ms ({pct(avg_optim):5.1f}%)")
 
-                                # Text Postprocessing
-                                if text_post_time > 0:
-                                    self.print(f"       ├─ Text Postprocess:  {text_post_time*1000:7.2f}ms ({text_post_time/avg_forward*100:5.1f}%)")
+                    self.print("  ────────────────────────────────────────────────────────────────")
+                    self.print(f"  Total Step:                {avg_total*1000:7.2f}ms (100.0%)")
 
-                                # Visual Encoder (CT-VIT)
-                                if visual_enc_time > 0:
-                                    self.print(f"       ├─ Visual Encoder:    {visual_enc_time*1000:7.2f}ms ({visual_enc_time/avg_forward*100:5.1f}%)  [CT-VIT]")
+                    # GPU & Memory
+                    self.print("")
+                    self.print("  💾 GPU & Memory:")
+                    gpu_memory_info = get_detailed_gpu_memory_info()
+                    for info_line in gpu_memory_info:
+                        self.print(f"     {info_line}")
+                    self.print("")
 
-                                    # Show CT-VIT detailed breakdown if available
-                                    if ctvit_detail:
-                                        spatial_data = ctvit_detail.get('spatial_transformer')
-                                        temporal_data = ctvit_detail.get('temporal_transformer')
-
-                                        # Handle both old format (float) and new format (dict)
-                                        if isinstance(spatial_data, dict):
-                                            spatial_time = spatial_data['total']
-                                        else:
-                                            spatial_time = spatial_data if spatial_data else 0
-
-                                        if isinstance(temporal_data, dict):
-                                            temporal_time = temporal_data['total']
-                                        else:
-                                            temporal_time = temporal_data if temporal_data else 0
-
-                                        # Spatial Transformer breakdown
-                                        if spatial_time > 0:
-                                            self.print(f"       │   ├─ Spatial Trans:     {spatial_time*1000:7.2f}ms ({spatial_time/visual_enc_time*100:5.1f}%)")
-
-                                            # Show detailed breakdown if available
-                                            if isinstance(spatial_data, dict):
-                                                attn_time = spatial_data.get('attention', 0)
-                                                ff_time = spatial_data.get('feedforward', 0)
-                                                norm_time = spatial_data.get('norm', 0)
-                                                labels = spatial_data.get('labels', {})
-
-                                                if attn_time > 0:
-                                                    attn_label = labels.get('attention', 'Attention')
-                                                    self.print(f"       │   │   ├─ Attention:   {attn_time*1000:7.2f}ms ({attn_time/spatial_time*100:5.1f}%)  [{attn_label}]")
-                                                if ff_time > 0:
-                                                    ff_label = labels.get('feedforward', 'FFN')
-                                                    self.print(f"       │   │   ├─ Feed-Forward:{ff_time*1000:7.2f}ms ({ff_time/spatial_time*100:5.1f}%)  [{ff_label}]")
-                                                if norm_time > 0:
-                                                    norm_label = labels.get('norm', 'Norm')
-                                                    self.print(f"       │   │   └─ Normalization:{norm_time*1000:7.2f}ms ({norm_time/spatial_time*100:5.1f}%)  [{norm_label}]")
-
-                                        # Temporal Transformer breakdown
-                                        if temporal_time > 0:
-                                            self.print(f"       │   └─ Temporal Trans:    {temporal_time*1000:7.2f}ms ({temporal_time/visual_enc_time*100:5.1f}%)")
-
-                                            # Show detailed breakdown if available
-                                            if isinstance(temporal_data, dict):
-                                                attn_time = temporal_data.get('attention', 0)
-                                                ff_time = temporal_data.get('feedforward', 0)
-                                                norm_time = temporal_data.get('norm', 0)
-                                                labels = temporal_data.get('labels', {})
-
-                                                if attn_time > 0:
-                                                    attn_label = labels.get('attention', 'Attention')
-                                                    self.print(f"       │       ├─ Attention:   {attn_time*1000:7.2f}ms ({attn_time/temporal_time*100:5.1f}%)  [{attn_label}]")
-                                                if ff_time > 0:
-                                                    ff_label = labels.get('feedforward', 'FFN')
-                                                    self.print(f"       │       ├─ Feed-Forward:{ff_time*1000:7.2f}ms ({ff_time/temporal_time*100:5.1f}%)  [{ff_label}]")
-                                                if norm_time > 0:
-                                                    norm_label = labels.get('norm', 'Norm')
-                                                    self.print(f"       │       └─ Normalization:{norm_time*1000:7.2f}ms ({norm_time/temporal_time*100:5.1f}%)  [{norm_label}]")
-
-                                # Image Pooling
-                                if image_pool_time > 0:
-                                    self.print(f"       ├─ Image Pooling:     {image_pool_time*1000:7.2f}ms ({image_pool_time/avg_forward*100:5.1f}%)")
-
-                                # Embed Selection
-                                if embed_sel_time > 0:
-                                    self.print(f"       ├─ Embed Selection:   {embed_sel_time*1000:7.2f}ms ({embed_sel_time/avg_forward*100:5.1f}%)")
-
-                                # Projection
-                                if proj_time > 0:
-                                    self.print(f"       ├─ Projection:        {proj_time*1000:7.2f}ms ({proj_time/avg_forward*100:5.1f}%)")
-
-                                # Similarity Computation (einsum)
-                                if similarity_time > 0:
-                                    self.print(f"       ├─ Similarity Compute:{similarity_time*1000:7.2f}ms ({similarity_time/avg_forward*100:5.1f}%)  [einsum operations]")
-
-                                # Loss Computation
-                                if loss_comp_time > 0:
-                                    self.print(f"       ├─ Loss Computation:  {loss_comp_time*1000:7.2f}ms ({loss_comp_time/avg_forward*100:5.1f}%)")
-
-                                # Other operations
-                                if other_time > 0:
-                                    self.print(f"       └─ Other ops:         {other_time*1000:7.2f}ms ({other_time/avg_forward*100:5.1f}%)")
-
-                            self.print("")
-
-                            # Backward and Optimizer
-                            if avg_backward > 0:
-                                self.print(f"     Backward Pass:          {avg_backward*1000:7.2f}ms ({avg_backward/avg_total*100:5.1f}%)")
-                            if avg_optim > 0:
-                                self.print(f"     Optimizer Step:         {avg_optim*1000:7.2f}ms ({avg_optim/avg_total*100:5.1f}%)")
-
-                            self.print(f"     ─────────────────────────────────────────")
-                            self.print(f"     Total:                  {avg_total*1000:7.2f}ms (100.0%)")
-
-                            # GPU & Memory info
-                            self.print("")
-                            self.print(f"  💾 GPU & Memory:")
-                            gpu_memory_info = get_detailed_gpu_memory_info()
-                            for info_line in gpu_memory_info:
-                                self.print(f"     {info_line}")
-                            self.print("")
-
-                    # Log to logger (commented out to avoid duplicate console output)
-                    # Uncomment if you need WandB logging
-                    # log_dict = {
-                    #     'loss': loss,
-                    #     'learning_rate': current_lr,
-                    #     'epoch': current_epoch_float,
-                    #     'step_time': avg_step_time,
-                    # }
-                    # if self.profile_timing:
-                    #     log_dict.update({
-                    #         'timing/data_loading': data_load_time,
-                    #         'timing/total_step': total_step_time,
-                    #     })
-                    #     log_dict.update({f'timing/{k}': v for k, v in step_timing.items()})
-                    # self.logger.log_metrics(log_dict, step=self.global_step, prefix='train')
-
-                # Validation
-                if self.global_step > 0 and self.global_step % self.eval_every_n_steps == 0:
-                    metrics = self.validate()
-                    self.model.train()
-
-                    # Save checkpoint
-                    if metrics:
-                        self.save_checkpoint(metrics)
-
-                # Save checkpoint (without validation)
-                elif self.global_step > 0 and self.global_step % self.save_every_n_steps == 0:
-                    metrics = {'macro_auroc': self.best_auroc}
+            # Validation & Checkpoint
+            if self.global_step > 0 and self.global_step % self.eval_every_n_steps == 0:
+                metrics = self.validate()
+                self.model.train()
+                if metrics:
                     self.save_checkpoint(metrics)
+            elif self.global_step > 0 and self.global_step % self.save_every_n_steps == 0:
+                metrics = {'macro_auroc': self.best_auroc}
+                self.save_checkpoint(metrics)
 
-        # Final validation
+        # 训练结束，最后一次验证 + 保存
         self.print(f"\n{'='*80}")
-        self.print(f"Training Complete!")
+        self.print("Training Complete!")
         self.print(f"{'='*80}")
         metrics = self.validate()
         if metrics:
@@ -844,5 +788,5 @@ class CTClipTrainer(nn.Module):
         self.print(f"\nBest AUROC: {self.best_auroc:.4f}")
         self.print(f"Results saved to: {self.results_folder}\n")
 
-        # Finish logging
         self.logger.finish()
+
