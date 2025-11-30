@@ -280,10 +280,10 @@ class CTClipTrainer(nn.Module):
         # Log hyperparameters
         self.logger.log_hyperparameters(config)
 
-        # Monitor model (WandB)
-        if config['logging'].get('use_wandb', False):
-            log_freq = config['logging'].get('log_every_n_steps', 100)
-            self.logger.watch_model(self.model, log_freq=log_freq)
+        # # Monitor model (WandB) - Commented out to reduce overhead
+        # if config['logging'].get('use_wandb', False):
+        #     log_freq = config['logging'].get('log_every_n_steps', 100)
+        #     self.logger.watch_model(self.model, log_freq=log_freq)
 
     def _load_pathology_classes(self, labels_path: str) -> List[str]:
         """Load pathology class names from CSV"""
