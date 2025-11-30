@@ -82,7 +82,7 @@ model:
 # Training configuration (epoch-based with step-level control)
 training:
   # Primary: Epoch-based training (recommended for consistency across batch sizes)
-  max_epochs: 30  # Train for 20 epochs
+  max_epochs: 20  # Train for 20 epochs
   max_steps: null  # If set, overrides max_epochs
 
   # Steps will be auto-calculated as: max_epochs × (num_samples ÷ batch_size)
