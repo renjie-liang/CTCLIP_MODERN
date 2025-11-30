@@ -73,6 +73,12 @@ model:
     downsample_image_embeds: false
     use_all_token_embeds: false
 
+    # Loss configuration
+    loss_type: 'softmax'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
+    # Notes:
+    # - softmax: Standard CLIP InfoNCE loss, batch size dependent
+    # - siglip: SigLIP pairwise logistic loss, more batch size independent
+
 # Training configuration (epoch-based with step-level control)
 training:
   # Primary: Epoch-based training (recommended for consistency across batch sizes)

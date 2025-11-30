@@ -73,6 +73,11 @@ class CTClipTrainer(nn.Module):
         self.gradient_accumulation_steps = training_cfg['gradient_accumulation_steps']
         self.min_lr_ratio = training_cfg.get('min_lr_ratio', 0.01)
 
+        # Info about gradient accumulation
+        if self.gradient_accumulation_steps > 1:
+            print(f"Using gradient accumulation with {self.gradient_accumulation_steps} steps")
+            print(f"Effective batch size: {self.batch_size * self.gradient_accumulation_steps}")
+
         # Store configs for later use (after dataset is loaded)
         self._training_cfg = training_cfg
         self._validation_cfg = validation_cfg
@@ -541,6 +546,8 @@ class CTClipTrainer(nn.Module):
         epoch = 0
         dataloader_iter = iter(self.train_dataloader)
         batch_idx_in_epoch = 0
+        # Global batch index for gradient accumulation (never resets)
+        global_batch_idx = 0
 
         log_every = self.config['logging'].get('log_every_n_steps', 10)
 
@@ -566,6 +573,7 @@ class CTClipTrainer(nn.Module):
             loss = result['loss']
             step_timing = result['timing']
             batch_idx_in_epoch += 1
+            global_batch_idx += 1
 
             if self.profile_timing:
                 torch.cuda.synchronize()

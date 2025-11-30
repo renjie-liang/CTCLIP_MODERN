@@ -447,13 +447,20 @@ class CTCLIP(nn.Module):
             image_ssl_loss_weight = 0.05,
             multiview_loss_weight = 0.1,
             checkpoint_during_training = False,
+            loss_type = 'softmax',  # 'softmax' or 'siglip'
             **kwargs
     ):
         super().__init__()
         #assert use_all_token_embeds or (visual_has_cls_token or text_has_cls_token), 'CLS token must be included on both vision and text transformers if you are not using fine-grained contrastive learning loss'
         self.dtype=torch.float32
-        # store some parameters for access
 
+        # Validate and store loss type
+        assert loss_type in ['softmax', 'siglip', 'sigmoid'], \
+            f"loss_type must be 'softmax' or 'siglip', got '{loss_type}'"
+        # Normalize 'sigmoid' to 'siglip' for consistency
+        self.loss_type = 'siglip' if loss_type == 'sigmoid' else loss_type
+
+        # store some parameters for access
         self.dim_text = dim_text
         self.dim_image = dim_image
         self.dim_latent = dim_latent
@@ -564,9 +571,19 @@ class CTCLIP(nn.Module):
         else:
             self.to_visual_latent = nn.Linear(dim_image, dim_latent, bias = False)
 
-        # temperature
-
-        self.temperature = nn.Parameter(torch.tensor(1.))
+        # Temperature and loss-specific parameters
+        if self.loss_type == 'softmax':
+            # InfoNCE loss (standard CLIP)
+            # Temperature initialized to 1.0
+            self.temperature = nn.Parameter(torch.tensor(1.0))
+            print(f"Using Softmax loss (InfoNCE) with initial temperature = 1.0")
+        else:  # siglip
+            # SigLIP loss (sigmoid-based pairwise logistic loss)
+            # Temperature stored in log-space, initialized to log(10.0) ≈ 2.3
+            self.temperature = nn.Parameter(torch.tensor(math.log(10.0)))
+            # Learnable logit bias, initialized to -10.0 to prevent early negative dominance
+            self.logit_bias = nn.Parameter(torch.tensor(-10.0))
+            print(f"Using SigLIP loss (sigmoid) with initial temperature = 10.0 (log-space), logit_bias = -10.0")
 
         # from https://arxiv.org/abs/2111.07783 (FILIP paper)
         self.use_all_token_embeds = use_all_token_embeds
@@ -615,6 +632,140 @@ class CTCLIP(nn.Module):
         token_type_ids = buffered_token_type_ids_expanded
         text_embeddings = self.text_transformer.embeddings(input_ids = input_ids, token_type_ids = token_type_ids)
         return text_embeddings
+
+    def _compute_softmax_loss(
+            self,
+            text_latents,
+            image_latents,
+            text_latents_extra,
+            image_latents_extra,
+            text_mask,
+            num_batch_texts,
+            num_batch_images,
+            b,
+            device,
+            temp
+    ):
+        """
+        Compute InfoNCE loss (softmax-based contrastive loss)
+
+        Formula: L = -log(exp(s_pos) / Σ exp(s_all))
+
+        Args:
+            text_latents: Text embeddings [b, d]
+            image_latents: Image embeddings [b, d]
+            ... (other parameters for multiview and masking)
+            temp: Temperature parameter (already computed, not in log-space)
+
+        Returns:
+            cl_loss: Main contrastive loss
+            multiview_cl_loss: Multiview contrastive losses (if any)
+        """
+        # split out multiview dimension for text and images
+        text_latents = rearrange(text_latents, '(m b) ... -> m b ...', m = num_batch_texts)
+        image_latents = rearrange(image_latents, '(m b) ... -> m b ...', m = num_batch_images)
+
+        if self.extra_latent_projection:
+            text_latents_extra = rearrange(text_latents_extra, '(m b) ... -> m b ...', m = num_batch_texts)
+            image_latents_extra = rearrange(image_latents_extra, '(m b) ... -> m b ...', m = num_batch_images)
+
+        # contrastive loss - similarity computation
+        if self.use_all_token_embeds:
+            # fine-grained CLIP logic
+            sim_text_to_image = einsum('m x t d, n y i d -> m n x y t i', text_latents, image_latents) * temp
+
+            sim_image_to_text = sim_text_to_image
+            if self.extra_latent_projection:
+                sim_image_to_text = einsum('m x t d, n y i d -> m n x y t i', text_latents_extra, image_latents_extra) * temp
+
+            text_to_image = reduce(sim_text_to_image, '... t i -> ... t', 'max')
+            text_to_image_mask = rearrange(text_mask, '(m b) t -> m 1 b 1 t', m = num_batch_texts).bool()
+            text_to_image = masked_mean(text_to_image, text_to_image_mask, dim = -1)
+
+            image_to_text_mask = rearrange(text_mask, '(m b) t -> m 1 b 1 t 1', m = num_batch_texts).bool()
+            masked_sim = sim_image_to_text.masked_fill(~image_to_text_mask, max_neg_value(sim_image_to_text.dtype))
+            image_to_text = reduce(reduce(masked_sim, '... t i -> ... i', 'max'), '... i -> ...', 'mean')
+        else:
+            text_to_image = einsum('m t d, n i d -> m n t i', text_latents, image_latents) * temp
+            image_to_text = rearrange(text_to_image, '... t i -> ... i t')
+
+            if self.extra_latent_projection:
+                image_to_text = einsum('m t d, n i d -> m n i t', text_latents_extra, image_latents_extra) * temp
+
+        # calculate loss
+        text_to_image = rearrange(text_to_image, 'm n ... -> (m n) ...')
+        image_to_text = rearrange(image_to_text, 'm n ... -> (m n) ...')
+
+        # exponentiate
+        text_to_image_exp, image_to_text_exp = map(torch.exp, (text_to_image, image_to_text))
+
+        # numerators (positive pairs - diagonal elements)
+        text_to_image_pos, image_to_text_pos = map(matrix_diag, (text_to_image_exp, image_to_text_exp))
+
+        # denominator (sum of all pairs)
+        if self.decoupled_contrastive_learning:
+            pos_mask = torch.eye(b, device = device, dtype = torch.bool)
+            text_to_image_exp, image_to_text_exp = map(lambda t: t.masked_fill(pos_mask, 0.), (text_to_image_exp, image_to_text_exp))
+
+        text_to_image_denom, image_to_text_denom = map(lambda t: t.sum(dim = -1), (text_to_image_exp, image_to_text_exp))
+
+        # InfoNCE loss: -log(exp(s_pos) / Σ exp(s_all)) = -s_pos + log(Σ exp(s_all))
+        text_to_image_loss = (-log(text_to_image_pos) + log(text_to_image_denom)).mean(dim = -1)
+        image_to_text_loss = (-log(image_to_text_pos) + log(image_to_text_denom)).mean(dim = -1)
+
+        # calculate CL loss (average of both directions)
+        cl_losses = (text_to_image_loss + image_to_text_loss) / 2
+
+        # get main CL loss vs multiview CL losses
+        cl_loss, multiview_cl_loss = cl_losses[0], cl_losses[1:]
+
+        return cl_loss, multiview_cl_loss
+
+    def _compute_siglip_loss(
+            self,
+            text_latents,
+            image_latents,
+            device,
+            temp
+    ):
+        """
+        Compute SigLIP loss (sigmoid-based pairwise logistic loss)
+
+        Formula: L = -Σ log(sigmoid(y_ij * s_ij)) / b
+        where y_ij = +1 if i==j (matching), -1 otherwise
+
+        Args:
+            text_latents: Text embeddings [b, d]
+            image_latents: Image embeddings [b, d]
+            device: Device
+            temp: Temperature parameter (already exp() for siglip)
+
+        Returns:
+            cl_loss: Main contrastive loss
+            multiview_cl_loss: Empty tensor (multiview not supported yet)
+        """
+        b = text_latents.shape[0]
+        assert b == image_latents.shape[0], "Text and image batch size must match for SigLIP loss"
+
+        # Compute pairwise logits for all text-image pairs
+        # logits[i, j] = <text_i, image_j> * temp + bias
+        logits = text_latents @ image_latents.t()  # [b, b]
+        logits = logits * temp + self.logit_bias
+
+        # Create labels matrix:
+        # +1 on diagonal (matching pairs)
+        # -1 off-diagonal (non-matching pairs)
+        labels = 2.0 * torch.eye(b, device=device, dtype=logits.dtype) - 1.0
+
+        # SigLIP pairwise logistic loss
+        # For each pair (i,j): -log(sigmoid(y_ij * logits_ij))
+        # Sum over all pairs and normalize by batch size
+        cl_loss = -F.logsigmoid(labels * logits).sum() / b
+
+        # Multiview not supported for SigLIP yet
+        multiview_cl_loss = torch.zeros(1, device=device, dtype=cl_loss.dtype)
+
+        return cl_loss, multiview_cl_loss
 
     def forward(
             self,
@@ -856,90 +1007,46 @@ class CTCLIP(nn.Module):
             einsum_args = (text_latents_extra, image_latents_extra) if self.extra_latent_projection and not text_to_image else (text_latents, image_latents)
             return einsum('b d, b d -> b', *einsum_args) * temp
 
-        # split out multiview dimension for text and images
+        # Compute contrastive loss based on loss_type
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start_similarity = time.time()
 
-        text_latents = rearrange(text_latents, '(m b) ... -> m b ...', m = num_batch_texts)
-        image_latents = rearrange(image_latents, '(m b) ... -> m b ...', m = num_batch_images)
-
-        if self.extra_latent_projection:
-            text_latents_extra = rearrange(text_latents_extra, '(m b) ... -> m b ...', m = num_batch_texts)
-            image_latents_extra = rearrange(image_latents_extra, '(m b) ... -> m b ...', m = num_batch_images)
-
-        # contrastive loss - similarity computation
-
-        """
-        m - num batches of text (for multiview)
-        n - num batches of images (for multiview)
-        x - batches of text
-        y - batches of images
-        t - sequence dimension along text tokens
-        i - sequence dimension along image tokens
-        """
-
-        if self.use_all_token_embeds:
-            # fine-grained CLIP logic
-            sim_text_to_image = einsum('m x t d, n y i d -> m n x y t i', text_latents, image_latents) * temp
-
-            sim_image_to_text = sim_text_to_image
-            if self.extra_latent_projection:
-                sim_image_to_text = einsum('m x t d, n y i d -> m n x y t i', text_latents_extra, image_latents_extra) * temp
-
-            text_to_image = reduce(sim_text_to_image, '... t i -> ... t', 'max')
-            text_to_image_mask = rearrange(text_mask, '(m b) t -> m 1 b 1 t', m = num_batch_texts).bool()
-            text_to_image = masked_mean(text_to_image, text_to_image_mask, dim = -1)
-
-            image_to_text_mask = rearrange(text_mask, '(m b) t -> m 1 b 1 t 1', m = num_batch_texts).bool()
-            masked_sim = sim_image_to_text.masked_fill(~image_to_text_mask, max_neg_value(sim_image_to_text.dtype))
-            image_to_text = reduce(reduce(masked_sim, '... t i -> ... i', 'max'), '... i -> ...', 'mean')
-        else:
-            text_to_image = einsum('m t d, n i d -> m n t i', text_latents, image_latents) * temp
-            image_to_text = rearrange(text_to_image, '... t i -> ... i t')
-
-            if self.extra_latent_projection:
-                image_to_text = einsum('m t d, n i d -> m n i t', text_latents_extra, image_latents_extra) * temp
+        if self.loss_type == 'softmax':
+            # InfoNCE loss (standard CLIP)
+            cl_loss, multiview_cl_loss = self._compute_softmax_loss(
+                text_latents=text_latents,
+                image_latents=image_latents,
+                text_latents_extra=text_latents_extra,
+                image_latents_extra=image_latents_extra,
+                text_mask=text_mask,
+                num_batch_texts=num_batch_texts,
+                num_batch_images=num_batch_images,
+                b=b,
+                device=device,
+                temp=temp
+            )
+        else:  # siglip
+            # SigLIP loss (sigmoid-based)
+            # Note: SigLIP currently doesn't support multiview augmentation
+            if is_multiview:
+                print("Warning: SigLIP loss does not support multiview augmentation yet. "
+                      "Falling back to single-view mode.")
+            cl_loss, multiview_cl_loss = self._compute_siglip_loss(
+                text_latents=text_latents,
+                image_latents=image_latents,
+                device=device,
+                temp=temp
+            )
 
         if self.profile_timing:
             torch.cuda.synchronize()
             self.timing_buffer['similarity_computation'] = time.time() - t_start_similarity
 
-        # calculate loss
+        # calculate loss with timing
         if self.profile_timing:
             torch.cuda.synchronize()
             t_start_loss = time.time()
-
-        text_to_image = rearrange(text_to_image, 'm n ... -> (m n) ...')
-        image_to_text = rearrange(image_to_text, 'm n ... -> (m n) ...')
-
-
-        # exponentiate
-        text_to_image_exp, image_to_text_exp = map(torch.exp, (text_to_image, image_to_text))
-
-        # numerators
-        text_to_image_pos, image_to_text_pos = map(matrix_diag, (text_to_image_exp, image_to_text_exp))
-
-        # denominator
-
-        if self.decoupled_contrastive_learning:
-            pos_mask = torch.eye(b, device = device, dtype = torch.bool)
-            text_to_image_exp, image_to_text_exp = map(lambda t: t.masked_fill(pos_mask, 0.), (text_to_image_exp, image_to_text_exp))
-
-        text_to_image_denom, image_to_text_denom = map(lambda t: t.sum(dim = -1), (text_to_image_exp, image_to_text_exp))
-
-        # loss
-
-        text_to_image_loss = (-log(text_to_image_pos) + log(text_to_image_denom)).mean(dim = -1)
-        image_to_text_loss = (-log(image_to_text_pos) + log(image_to_text_denom)).mean(dim = -1)
-
-        # calculate CL loss
-
-        cl_losses = (text_to_image_loss + image_to_text_loss) / 2
-
-        # get main CL loss vs multiview CL losses
-
-        cl_loss, multiview_cl_loss = cl_losses[0], cl_losses[1:]
 
         # if no augmented text or images passed in, multiview loss weight is 0
 
