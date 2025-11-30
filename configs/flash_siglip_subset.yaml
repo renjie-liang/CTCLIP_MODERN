@@ -1,12 +1,12 @@
-# CT-CLIP Training - SigLIP Loss Configuration
-# Configuration for SigLIP (sigmoid-based) contrastive loss
+# CT-CLIP Training - Base Configuration
+# Base configuration template for all experiments
 
 # Experiment information
 experiment:
-  name: "ct-clip-siglip"
-  tags: ["siglip", "sigmoid-loss", "ctclip"]
+  name: "ctclip_flash_siglip"
+  tags: ["optimized", "flash_attention", "rms_norm", "swiglu", 'siglip']
   seed: 2025
-  notes: "SigLIP loss - sigmoid-based pairwise logistic loss (batch size independent)"
+  notes: "Step-based training configuration"
 
 # Data configuration
 data:
@@ -31,8 +31,8 @@ data:
 
   # DataLoader configuration
   batch_size: 16
-  num_workers: 4  
-  prefetch_factor: 1  # Number of batches to prefetch per worker
+  num_workers: 8  
+  prefetch_factor: 2  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
@@ -53,9 +53,9 @@ model:
     heads: 8
 
     # Optimization flags (for ablation studies)
-    use_flash_attention: false  # true = FlashAttention, false = baseline Attention
-    use_rms_norm: false         # true = RMSNorm, false = LayerNorm
-    use_swiglu: false           # true = SwiGLU, false = GEGLU
+    use_flash_attention: true  # true = FlashAttention, false = baseline Attention
+    use_rms_norm: true         # true = RMSNorm, false = LayerNorm
+    use_swiglu: true           # true = SwiGLU, false = GEGLU
 
   # Text Encoder (BiomedBERT)
   text_encoder:
@@ -76,16 +76,13 @@ model:
     # Loss configuration
     loss_type: 'siglip'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
     # Notes:
-    # - Using SigLIP loss: sigmoid-based pairwise logistic loss
-    # - More batch size independent than softmax
-    # - Temperature initialized to 10.0 (log-space), learnable
-    # - Logit bias initialized to -10.0, learnable
-    # - Reference: https://arxiv.org/abs/2303.15343
+    # - softmax: Standard CLIP InfoNCE loss, batch size dependent
+    # - siglip: SigLIP pairwise logistic loss, more batch size independent
 
 # Training configuration (epoch-based with step-level control)
 training:
   # Primary: Epoch-based training (recommended for consistency across batch sizes)
-  max_epochs: 10  # Train for 20 epochs
+  max_epochs: 30 
   max_steps: null  # If set, overrides max_epochs
 
   # Steps will be auto-calculated as: max_epochs × (num_samples ÷ batch_size)
@@ -118,7 +115,7 @@ validation:
 
 # Checkpoint configuration
 checkpoint:
-  save_dir: "./saves/siglip"
+  save_dir: "saves/flash_siglip"
   keep_last_n: 3
   save_best: true
   best_metric: "auroc"
@@ -128,10 +125,9 @@ checkpoint:
 logging:
   use_wandb: true
   use_tensorboard: false
-  use_console: true
 
   wandb:
-    project: "ct-clip"
+    project: "ctclip_ablation"
     entity: null
     mode: "online"
     group: null
@@ -146,7 +142,7 @@ logging:
   # Shows: data loading, model forward (spatial/temporal), backward, optimizer
   # Includes: GPU memory usage and GPU utilization
   # Auto-enables model internal profiling when true
-  profile_timing: true
+  profile_timing: false
 
 # Device configuration
 device:
