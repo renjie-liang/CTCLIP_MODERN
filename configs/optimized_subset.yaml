@@ -112,7 +112,7 @@ checkpoint:
   save_dir: "saves/optimized_full"
   keep_last_n: 3
   save_best: true
-  best_metric: "auroc"
+  best_metric: "weighted_auroc"  # Options: 'weighted_auroc' (sample-weighted), 'macro_auroc' (class-balanced)
   best_metric_mode: "max"
 
 # Logging configuration
