@@ -240,3 +240,61 @@ def aggregate_metrics(
             aggregated[f'macro_{metric_name}'] = np.nan
 
     return aggregated
+
+
+def aggregate_metrics_weighted(
+    per_class_metrics: Dict[str, Dict[str, float]],
+    classes: list,
+    support: Dict[str, int]
+) -> Dict[str, float]:
+    """
+    Aggregate metrics across classes with weighted average
+
+    Compute weighted average (classes weighted by sample count)
+
+    Args:
+        per_class_metrics: {class_name: {metric_name: value}}
+        classes: List of class names
+        support: {class_name: sample_count} - number of positive samples per class
+
+    Returns:
+        {'weighted_auroc': float, 'weighted_auprc': float, ...}
+    """
+    aggregated = {}
+
+    # Extract all metric names
+    if not per_class_metrics or not classes:
+        return {}
+
+    first_class = classes[0]
+    metric_names = list(per_class_metrics[first_class].keys())
+
+    # Compute total support
+    total_support = sum(support.get(class_name, 0) for class_name in classes)
+
+    if total_support == 0:
+        # If no support information, fall back to macro average
+        for metric_name in metric_names:
+            aggregated[f'weighted_{metric_name}'] = np.nan
+        return aggregated
+
+    # Compute weighted average for each metric
+    for metric_name in metric_names:
+        weighted_sum = 0.0
+        valid_support = 0
+
+        for class_name in classes:
+            if class_name in per_class_metrics and class_name in support:
+                value = per_class_metrics[class_name].get(metric_name, np.nan)
+                class_support = support[class_name]
+
+                if not np.isnan(value) and class_support > 0:
+                    weighted_sum += value * class_support
+                    valid_support += class_support
+
+        if valid_support > 0:
+            aggregated[f'weighted_{metric_name}'] = float(weighted_sum / valid_support)
+        else:
+            aggregated[f'weighted_{metric_name}'] = np.nan
+
+    return aggregated

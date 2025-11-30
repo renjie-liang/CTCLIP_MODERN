@@ -16,7 +16,8 @@ from .metrics import (
     compute_auprc,
     compute_f1_optimal,
     compute_confusion_matrix_metrics,
-    aggregate_metrics
+    aggregate_metrics,
+    aggregate_metrics_weighted
 )
 
 
@@ -120,11 +121,15 @@ class DiseaseEvaluator:
 
         # Compute metrics for each class
         per_class_metrics = {}
+        support_dict = {}  # Track number of positive samples per class
         skipped_classes = []  # Track classes with single-class issue
 
         for i, class_name in enumerate(self.pathology_classes):
             y_true = labels[:, i]
             y_score = predictions[:, i]
+
+            # Compute support (number of positive samples)
+            support_dict[class_name] = int(np.sum(y_true))
 
             # Check if only one class present
             if len(np.unique(y_true)) < 2:
@@ -139,6 +144,10 @@ class DiseaseEvaluator:
 
         # Aggregate metrics (macro average)
         results = aggregate_metrics(per_class_metrics, self.pathology_classes)
+
+        # Aggregate metrics (weighted average)
+        weighted_results = aggregate_metrics_weighted(per_class_metrics, self.pathology_classes, support_dict)
+        results.update(weighted_results)
 
         # If needed, add detailed information for each class
         if return_per_class:
@@ -306,6 +315,15 @@ class DiseaseEvaluator:
                         line += f" (95% CI: [{ci_lower:.4f}, {ci_upper:.4f}])"
 
                 lines.append(line)
+
+        # Weighted metrics
+        lines.append(f"\n{prefix}Weighted Metrics:")
+        for metric in self.metrics:
+            key = f'weighted_{metric}'
+            if key in results:
+                value = results[key]
+                if not np.isnan(value):
+                    lines.append(f"{prefix}  {metric.upper()}: {value:.4f}")
 
         # Per-class metrics
         if 'per_class' in results:
