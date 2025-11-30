@@ -1,12 +1,12 @@
-# CT-CLIP Training - Base Configuration
-# Base configuration template for all experiments
+# CT-CLIP Training - SigLIP Loss Configuration
+# Configuration for SigLIP (sigmoid-based) contrastive loss
 
 # Experiment information
 experiment:
-  name: "ct-clip-baseline"
-  tags: ["baseline", "ctclip"]
+  name: "ct-clip-siglip"
+  tags: ["siglip", "sigmoid-loss", "ctclip"]
   seed: 2025
-  notes: "Step-based training configuration"
+  notes: "SigLIP loss - sigmoid-based pairwise logistic loss (batch size independent)"
 
 # Data configuration
 data:
@@ -74,10 +74,13 @@ model:
     use_all_token_embeds: false
 
     # Loss configuration
-    loss_type: 'softmax'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
+    loss_type: 'siglip'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
     # Notes:
-    # - softmax: Standard CLIP InfoNCE loss, batch size dependent
-    # - siglip: SigLIP pairwise logistic loss, more batch size independent
+    # - Using SigLIP loss: sigmoid-based pairwise logistic loss
+    # - More batch size independent than softmax
+    # - Temperature initialized to 10.0 (log-space), learnable
+    # - Logit bias initialized to -10.0, learnable
+    # - Reference: https://arxiv.org/abs/2303.15343
 
 # Training configuration (epoch-based with step-level control)
 training:
@@ -115,7 +118,7 @@ validation:
 
 # Checkpoint configuration
 checkpoint:
-  save_dir: "./saves/baseline"
+  save_dir: "./saves/siglip"
   keep_last_n: 3
   save_best: true
   best_metric: "auroc"
