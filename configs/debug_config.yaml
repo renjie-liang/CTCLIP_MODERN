@@ -28,7 +28,7 @@ data:
   # DataLoader configuration - OPTIMIZED FOR DEBUGGING
   batch_size: 4           # Small batch for debugging
   num_workers: 0          # Single process - easier to debug
-  prefetch_factor: 2      # Ignored when num_workers=0
+  prefetch_factor: 1      # Ignored when num_workers=0
   persistent_workers: false  # Not used with num_workers=0
   use_embedding: false
   embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"

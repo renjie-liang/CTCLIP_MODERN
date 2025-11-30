@@ -3,8 +3,8 @@
 
 # Experiment information
 experiment:
-  name: "ctclip_optimized_full"
-  tags: ["optimized", "flash_attention", "rms_norm", "swiglu"]
+  name: "ctclip_flash_siglip"
+  tags: ["optimized", "flash_attention", "rms_norm", "swiglu", 'siglip']
   seed: 2025
   notes: "Step-based training configuration"
 
@@ -31,7 +31,7 @@ data:
 
   # DataLoader configuration
   batch_size: 16
-  num_workers: 4  
+  num_workers: 8  
   prefetch_factor: 1  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
@@ -74,7 +74,7 @@ model:
     use_all_token_embeds: false
 
     # Loss configuration
-    loss_type: 'softmax'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
+    loss_type: 'siglip'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
     # Notes:
     # - softmax: Standard CLIP InfoNCE loss, batch size dependent
     # - siglip: SigLIP pairwise logistic loss, more batch size independent
@@ -105,7 +105,7 @@ training:
 # Validation configuration
 validation:
   # Evaluation frequency (epoch-based)
-  eval_every_n_epochs: 0.5  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
+  eval_every_n_epochs: 1  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
   eval_every_n_steps: null  # Alternative: specify exact steps
 
   eval_samples: null  # Validate on 200 samples for speed (null = all samples)
@@ -115,10 +115,10 @@ validation:
 
 # Checkpoint configuration
 checkpoint:
-  save_dir: "saves/optimized_full"
+  save_dir: "saves/flash_siglip"
   keep_last_n: 3
   save_best: true
-  best_metric: "weighted_auroc"  # Options: 'weighted_auroc' (sample-weighted), 'macro_auroc' (class-balanced)
+  best_metric: "auroc"
   best_metric_mode: "max"
 
 # Logging configuration

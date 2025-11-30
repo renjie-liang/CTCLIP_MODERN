@@ -105,7 +105,7 @@ training:
 # Validation configuration
 validation:
   # Evaluation frequency (epoch-based)
-  eval_every_n_epochs: 0.5  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
+  eval_every_n_epochs: 1  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
   eval_every_n_steps: null  # Alternative: specify exact steps
 
   eval_samples: null  # Validate on 200 samples for speed (null = all samples)
