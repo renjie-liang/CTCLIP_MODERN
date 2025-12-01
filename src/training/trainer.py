@@ -46,13 +46,14 @@ class CTClipTrainer(nn.Module):
     All parameters from config, fail fast if missing
     """
 
-    def __init__(self, model, config: Dict):
+    def __init__(self, model, config: Dict, resume_wandb_id: str = None):
         """
         Initialize Trainer
 
         Args:
             model: CT-CLIP model
             config: Configuration dict (required)
+            resume_wandb_id: WandB run ID to resume (optional, for continuing interrupted runs)
         """
         super().__init__()
 
@@ -244,7 +245,7 @@ class CTClipTrainer(nn.Module):
         self.print("="*80)
 
         # Logger
-        self.logger = create_logger(config)
+        self.logger = create_logger(config, resume_wandb_id=resume_wandb_id)
         self.print("✓ Logger initialized")
 
         # Evaluator
@@ -302,6 +303,11 @@ class CTClipTrainer(nn.Module):
 
     def save_checkpoint(self, metrics: Dict):
         """Save checkpoint"""
+        # Get wandb run id for resuming
+        wandb_run_id = None
+        if hasattr(self.logger, 'get_run_id'):
+            wandb_run_id = self.logger.get_run_id()
+
         save_path = self.checkpoint_manager.save_checkpoint(
             epoch=self.current_epoch,
             global_step=self.global_step,
@@ -309,7 +315,8 @@ class CTClipTrainer(nn.Module):
             optimizer=self.optim,
             scheduler=self.scheduler,
             metrics=metrics,
-            config=self.config
+            config=self.config,
+            wandb_run_id=wandb_run_id
         )
 
         self.print(f'✓ Checkpoint saved: {save_path}')

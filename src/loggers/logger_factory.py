@@ -59,13 +59,21 @@ class MultiLogger(BaseLogger):
         for logger in self.loggers:
             logger.finish()
 
+    def get_run_id(self):
+        """Get WandB run ID (if WandB logger exists)"""
+        for logger in self.loggers:
+            if hasattr(logger, 'get_run_id'):
+                return logger.get_run_id()
+        return None
 
-def create_logger(config: Dict[str, Any]) -> BaseLogger:
+
+def create_logger(config: Dict[str, Any], resume_wandb_id: str = None) -> BaseLogger:
     """
     Create logger based on configuration
 
     Args:
         config: Complete configuration dictionary
+        resume_wandb_id: WandB run ID to resume (for continuing interrupted runs)
 
     Returns:
         Logger instance (may be MultiLogger)
@@ -95,7 +103,8 @@ def create_logger(config: Dict[str, Any]) -> BaseLogger:
                 entity=wandb_config.get('entity'),
                 group=wandb_config.get('group'),
                 job_type=wandb_config.get('job_type', 'train'),
-                mode=wandb_config.get('mode', 'online')
+                mode=wandb_config.get('mode', 'online'),
+                resume_id=resume_wandb_id  # Resume existing run if provided
             )
             loggers.append(wandb_logger)
             print("✓ WandB logger enabled")
