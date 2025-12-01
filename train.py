@@ -41,6 +41,12 @@ def parse_args():
         help='Do not load optimizer state from checkpoint (use when resuming from different model architecture)'
     )
 
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug mode: disable wandb, enable profiling, reduce validation samples, verbose logging'
+    )
+
     return parser.parse_args()
 
 
@@ -98,6 +104,30 @@ def main():
 
     print(f"Experiment: {config['experiment']['name']}")
     print(f"Config: {args.config}")
+
+    # Apply debug mode overrides
+    if args.debug:
+        print("\n" + "="*80)
+        print("🐛 DEBUG MODE ENABLED")
+        print("="*80)
+        print("Debug settings:")
+        print("  • Wandb: DISABLED (logs saved locally only)")
+        print("  • Performance profiling: ENABLED (detailed timing every 100 steps)")
+        print("  • Validation samples: 100 (faster validation)")
+        print("  • Logging frequency: Every 1 step (verbose output)")
+        print("="*80 + "\n")
+
+        # Disable wandb
+        config['logging']['use_wandb'] = False
+
+        # Enable performance profiling
+        config['logging']['profile_timing'] = True
+
+        # Reduce validation samples for faster debugging
+        config['validation']['eval_samples'] = 100
+
+        # More frequent logging
+        config['logging']['log_every_n_steps'] = 1
 
     # Set seed
     seed = config['experiment'].get('seed', 2025)
