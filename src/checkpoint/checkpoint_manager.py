@@ -168,7 +168,8 @@ class CheckpointManager:
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[Any] = None,
         load_random_states: bool = True,
-        strict: bool = True
+        strict: bool = True,
+        load_optimizer: bool = True
     ) -> Dict[str, Any]:
         """
         Load checkpoint and restore training state
@@ -180,6 +181,7 @@ class CheckpointManager:
             scheduler: Scheduler (None=don't restore scheduler state)
             load_random_states: Whether to restore random states
             strict: Whether to strictly match model state dict
+            load_optimizer: Whether to load optimizer state (set False if shape mismatch)
 
         Returns:
             Checkpoint dictionary containing epoch, global_step, metrics, etc.
@@ -204,15 +206,25 @@ class CheckpointManager:
         model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
         print(f"✓ Model state restored")
 
-        # Restore optimizer
-        if optimizer is not None and 'optimizer_state_dict' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            print(f"✓ Optimizer state restored")
+        # Restore optimizer with error handling
+        if optimizer is not None and 'optimizer_state_dict' in checkpoint and load_optimizer:
+            try:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                print(f"✓ Optimizer state restored")
+            except Exception as e:
+                warnings.warn(f"Failed to load optimizer state: {e}\n"
+                              f"Continuing with fresh optimizer state. Training will resume but "
+                              f"optimizer momentum/running averages will be reset.")
+                print(f"⚠ Optimizer state NOT restored (continuing with fresh optimizer)")
 
         # Restore scheduler
         if scheduler is not None and 'scheduler_state_dict' in checkpoint:
-            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-            print(f"✓ Scheduler state restored")
+            try:
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                print(f"✓ Scheduler state restored")
+            except Exception as e:
+                warnings.warn(f"Failed to load scheduler state: {e}")
+                print(f"⚠ Scheduler state NOT restored")
 
         # Restore random states
         if load_random_states and 'random_states' in checkpoint:
