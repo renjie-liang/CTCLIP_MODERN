@@ -162,12 +162,28 @@ def main():
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
 
+    # Check if resuming from checkpoint to get wandb run id
+    resume_wandb_id = None
+    if args.resume:
+        print("\n" + "="*80)
+        print("Checking checkpoint for WandB run ID...")
+        print("="*80)
+        try:
+            checkpoint = torch.load(args.resume, map_location='cpu', weights_only=False)
+            resume_wandb_id = checkpoint.get('wandb_run_id')
+            if resume_wandb_id:
+                print(f"✓ Found WandB run ID: {resume_wandb_id}")
+            else:
+                print("ℹ No WandB run ID found in checkpoint (will create new run)")
+        except Exception as e:
+            print(f"⚠ Warning: Could not load checkpoint to check WandB ID: {e}")
+
     # Create Trainer
     print("\n" + "="*80)
     print("Initializing Trainer...")
     print("="*80)
 
-    trainer = CTClipTrainer(model, config)
+    trainer = CTClipTrainer(model, config, resume_wandb_id=resume_wandb_id)
 
     # Resume from checkpoint if needed
     if args.resume:

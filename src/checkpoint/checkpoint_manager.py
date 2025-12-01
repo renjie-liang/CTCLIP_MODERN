@@ -95,7 +95,8 @@ class CheckpointManager:
         scheduler: Optional[Any] = None,
         metrics: Optional[Dict[str, float]] = None,
         config: Optional[Dict[str, Any]] = None,
-        extra_state: Optional[Dict[str, Any]] = None
+        extra_state: Optional[Dict[str, Any]] = None,
+        wandb_run_id: Optional[str] = None
     ) -> str:
         """
         Save complete checkpoint
@@ -109,6 +110,7 @@ class CheckpointManager:
             metrics: Validation metrics
             config: Configuration dictionary
             extra_state: Additional state to save
+            wandb_run_id: WandB run ID for resuming
 
         Returns:
             Path to saved file
@@ -125,7 +127,8 @@ class CheckpointManager:
             'optimizer_state_dict': optimizer.state_dict(),
             'metrics': metrics,
             'config': config,
-            'extra_state': extra_state
+            'extra_state': extra_state,
+            'wandb_run_id': wandb_run_id  # Save wandb run id for resuming
         }
 
         # Save scheduler state

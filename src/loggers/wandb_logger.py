@@ -33,7 +33,8 @@ class WandBLogger(BaseLogger):
         tags: Optional[list] = None,
         group: Optional[str] = None,
         job_type: str = "train",
-        mode: str = "online"
+        mode: str = "online",
+        resume_id: Optional[str] = None
     ):
         """
         Args:
@@ -45,6 +46,7 @@ class WandBLogger(BaseLogger):
             group: Experiment group name
             job_type: Job type
             mode: 'online', 'offline', or 'disabled'
+            resume_id: WandB run id to resume from (for continuing interrupted runs)
         """
         try:
             import wandb
@@ -60,18 +62,37 @@ class WandBLogger(BaseLogger):
         tags = tags or exp_config.get('tags', [])
 
         # Initialize wandb run
-        self.run = wandb.init(
-            project=project,
-            entity=entity,
-            name=name,
-            tags=tags,
-            group=group,
-            job_type=job_type,
-            config=config,
-            mode=mode
-        )
+        if resume_id:
+            # Resume existing run
+            print(f"Resuming WandB run: {resume_id}")
+            self.run = wandb.init(
+                project=project,
+                entity=entity,
+                id=resume_id,
+                resume="allow",  # Allow resuming if run exists, otherwise create new
+                config=config,
+                mode=mode
+            )
+            print(f"✓ WandB run resumed: {self.run.url}")
+        else:
+            # Create new run
+            self.run = wandb.init(
+                project=project,
+                entity=entity,
+                name=name,
+                tags=tags,
+                group=group,
+                job_type=job_type,
+                config=config,
+                mode=mode
+            )
+            print(f"WandB run initialized: {self.run.url}")
 
-        print(f"WandB run initialized: {self.run.url}")
+    def get_run_id(self) -> Optional[str]:
+        """Get current WandB run ID for checkpointing"""
+        if self.run is not None:
+            return self.run.id
+        return None
 
     def log_metrics(
         self,
