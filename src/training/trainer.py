@@ -320,15 +320,21 @@ class CTClipTrainer(nn.Module):
             self.best_auroc = current_auroc
             self.print(f'✅ New best model! {self.best_metric}: {self.best_auroc:.4f}')
 
-    def load_checkpoint(self, path: str):
-        """Load checkpoint"""
+    def load_checkpoint(self, path: str, load_optimizer: bool = True):
+        """Load checkpoint
+
+        Args:
+            path: Path to checkpoint file
+            load_optimizer: Whether to load optimizer state (set False if model architecture changed)
+        """
         path = Path(path)
 
         checkpoint = self.checkpoint_manager.load_checkpoint(
             str(path),
             model=self.model,
             optimizer=self.optim,
-            scheduler=self.scheduler
+            scheduler=self.scheduler,
+            load_optimizer=load_optimizer
         )
 
         self.global_step = checkpoint.get('global_step', 0)
