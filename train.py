@@ -35,6 +35,12 @@ def parse_args():
         help='Path to checkpoint to resume from'
     )
 
+    parser.add_argument(
+        '--no-load-optimizer',
+        action='store_true',
+        help='Do not load optimizer state from checkpoint (use when resuming from different model architecture)'
+    )
+
     return parser.parse_args()
 
 
@@ -132,8 +138,10 @@ def main():
     if args.resume:
         print("\n" + "="*80)
         print(f"Resuming from checkpoint: {args.resume}")
+        if args.no_load_optimizer:
+            print("⚠ WARNING: Optimizer state will NOT be loaded (--no-load-optimizer)")
         print("="*80)
-        trainer.load_checkpoint(args.resume)
+        trainer.load_checkpoint(args.resume, load_optimizer=not args.no_load_optimizer)
 
     # Start training
     print("\n" + "="*80)
