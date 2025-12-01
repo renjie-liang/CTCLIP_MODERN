@@ -115,6 +115,7 @@ def main():
         print("  • Performance profiling: ENABLED (detailed timing every 100 steps)")
         print("  • Validation samples: 100 (faster validation)")
         print("  • Logging frequency: Every 1 step (verbose output)")
+        print("  • Data loading: num_workers=8, prefetch_factor=2 (faster I/O)")
         print("="*80 + "\n")
 
         # Disable wandb
@@ -128,6 +129,10 @@ def main():
 
         # More frequent logging
         config['logging']['log_every_n_steps'] = 1
+
+        # Increase data loading parallelism
+        config['data']['num_workers'] = 8
+        config['data']['prefetch_factor'] = 2
 
     # Set seed
     seed = config['experiment'].get('seed', 2025)
