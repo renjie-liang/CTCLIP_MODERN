@@ -31,7 +31,7 @@ data:
 
   # DataLoader configuration
   batch_size: 16
-  num_workers: 8  
+  num_workers: 4  
   prefetch_factor: 1  # Number of batches to prefetch per worker
   persistent_workers: true  # Keep worker processes alive between epochs
   use_embedding: false
@@ -118,7 +118,7 @@ checkpoint:
   save_dir: "saves/flash_siglip"
   keep_last_n: 3
   save_best: true
-  best_metric: "auroc"
+  best_metric: "weighted_auroc"
   best_metric_mode: "max"
 
 # Logging configuration
@@ -127,7 +127,7 @@ logging:
   use_tensorboard: false
 
   wandb:
-    project: "ctclip_ablation"
+    project: "ct-clip"
     entity: null
     mode: "online"
     group: null

@@ -127,7 +127,7 @@ logging:
   use_tensorboard: false
 
   wandb:
-    project: "ctclip_ablation"
+    project: "ct-clip"
     entity: null
     mode: "online"
     group: null

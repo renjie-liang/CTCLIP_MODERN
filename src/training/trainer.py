@@ -561,7 +561,7 @@ class CTClipTrainer(nn.Module):
         self.print("Starting Training")
         self.print(f"{'='*80}\n")
 
-        epoch = 0
+        epoch = self.current_epoch
         dataloader_iter = iter(self.train_dataloader)
         batch_idx_in_epoch = 0
         # Global batch index for gradient accumulation (never resets)
