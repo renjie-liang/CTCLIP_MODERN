@@ -18,7 +18,7 @@ import nibabel as nib
 from tqdm import tqdm
 
 
-def analyze_single_file(nii_path):
+def analyze_single_file(nii_path, base_dir=None):
     """Analyze a single nii.gz file and extract statistics."""
     try:
         # Load NIfTI file
@@ -34,6 +34,7 @@ def analyze_single_file(nii_path):
         # Extract statistics
         stats = {
             'file': Path(nii_path).name,
+            'relative_path': str(Path(nii_path).relative_to(base_dir)) if base_dir else Path(nii_path).name,
             'shape': data.shape,
             'dtype': str(data.dtype),
             'spacing': tuple(pixdim),
@@ -81,15 +82,29 @@ def main():
     print(f"Sample size: {args.num_samples}")
     print()
 
-    # Find all nii.gz files
-    print("🔍 Searching for nii.gz files...")
-    nii_files = list(data_dir.glob("*.nii.gz"))
+    # Find all nii.gz files (recursive search for nested directories)
+    print("🔍 Searching for nii.gz files (recursive)...")
+    nii_files = list(data_dir.rglob("*.nii.gz"))
 
     if len(nii_files) == 0:
         print(f"❌ No nii.gz files found in {data_dir}")
+        print(f"   Tried recursive search with pattern: **/*.nii.gz")
         return
 
     print(f"   Found {len(nii_files)} total files")
+
+    # Analyze directory structure depth
+    depths = []
+    for f in nii_files[:100]:  # Sample first 100 for structure analysis
+        relative_path = f.relative_to(data_dir)
+        depth = len(relative_path.parts) - 1  # Exclude the filename
+        depths.append(depth)
+
+    if depths:
+        max_depth = max(depths)
+        min_depth = min(depths)
+        print(f"   Directory depth: {min_depth} to {max_depth} levels")
+        print(f"   Example path: {nii_files[0].relative_to(data_dir)}")
 
     # Sample files
     random.seed(args.random_seed)
@@ -105,7 +120,7 @@ def main():
     all_stats = []
 
     for nii_path in tqdm(sampled_files, desc="Analyzing", unit="file"):
-        stats = analyze_single_file(nii_path)
+        stats = analyze_single_file(nii_path, base_dir=data_dir)
         if stats:
             all_stats.append(stats)
 
@@ -248,7 +263,7 @@ def main():
     print("="*80)
 
     for i, stats in enumerate(all_stats[:5]):
-        print(f"\n[{i+1}] {stats['file']}")
+        print(f"\n[{i+1}] {stats['relative_path']}")
         print(f"    Shape: {stats['shape']}")
         print(f"    Spacing: {stats['spacing']}")
         print(f"    Dtype: {stats['dtype']}")
