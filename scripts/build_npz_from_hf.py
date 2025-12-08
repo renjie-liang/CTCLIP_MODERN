@@ -43,8 +43,9 @@ from config_npz_conversion import (
     STORAGE_DTYPE,
     TARGET_ORIENTATION,
     USE_NESTED_STRUCTURE,
+    LOCAL_SOURCE_DIRS,
     TEMP_DIR,
-    KEEP_DOWNLOADED_FILES,
+    DELETE_SOURCE_AFTER_CONVERSION,
     SKIP_EXISTING,
     CHECK_ORIENTATION,
     VALIDATE_SPACING,
@@ -58,6 +59,35 @@ from config_npz_conversion import (
 # ============================================================================
 # Utility Functions
 # ============================================================================
+
+def scan_local_nii_files(local_dir: Path) -> Dict[str, Path]:
+    """
+    Recursively scan local directory for nii.gz files.
+
+    Args:
+        local_dir: Local directory to scan
+
+    Returns:
+        Dictionary mapping study_id to local file path
+    """
+    if not local_dir.exists():
+        return {}
+
+    print(f"\n🔍 Scanning local directory: {local_dir}")
+
+    # Recursively find all nii.gz files
+    nii_files = list(local_dir.rglob("*.nii.gz"))
+
+    # Build study_id -> path mapping
+    local_files = {}
+    for nii_path in nii_files:
+        study_id = nii_path.stem.replace('.nii', '')
+        local_files[study_id] = nii_path
+
+    print(f"   Found {len(local_files)} local nii.gz files")
+
+    return local_files
+
 
 def extract_study_id(hf_path: str) -> str:
     """
@@ -424,10 +454,17 @@ def save_npz(
 def preprocess_single_file(
     hf_file_path: str,
     output_dir: Path,
-    temp_dir: Path
+    temp_dir: Path,
+    local_nii_path: Path = None
 ) -> Dict:
     """
-    Process a single nii.gz file from HuggingFace.
+    Process a single nii.gz file.
+
+    Args:
+        hf_file_path: HuggingFace file path (for reference)
+        output_dir: Output directory for NPZ
+        temp_dir: Temp directory for downloads
+        local_nii_path: Local nii.gz path if already downloaded
 
     Returns:
         Result dictionary with statistics
@@ -456,26 +493,42 @@ def preprocess_single_file(
             'npz_path': str(npz_path)
         }
 
-    # Download from HuggingFace (or use existing)
-    if VERBOSE:
-        print(f"   [1] Downloading from HuggingFace...")
+    # Get nii.gz file path
+    source_was_local = False
+    need_cleanup = False
 
-    local_nii_path = hf_hub_download(
-        repo_id=HF_REPO_ID,
-        filename=hf_file_path,
-        repo_type=HF_REPO_TYPE,
-        local_dir=temp_dir,
-        local_dir_use_symlinks=False
-    )
+    if local_nii_path and local_nii_path.exists():
+        # Use local file
+        if VERBOSE:
+            print(f"   [1] Using local file...")
+            print(f"      ✓ Local path: {local_nii_path}")
+        nii_path_to_process = str(local_nii_path)
+        source_was_local = True
+        # Will delete if configured
+        need_cleanup = DELETE_SOURCE_AFTER_CONVERSION
+    else:
+        # Download from HuggingFace
+        if VERBOSE:
+            print(f"   [1] Downloading from HuggingFace...")
 
-    if VERBOSE:
-        print(f"      ✓ Downloaded to: {local_nii_path}")
+        nii_path_to_process = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename=hf_file_path,
+            repo_type=HF_REPO_TYPE,
+            local_dir=temp_dir,
+            local_dir_use_symlinks=False
+        )
+
+        if VERBOSE:
+            print(f"      ✓ Downloaded to: {nii_path_to_process}")
+        # Always delete downloaded files after processing
+        need_cleanup = True
 
     # Load NIfTI
     if VERBOSE:
         print(f"   [2] Loading NIfTI...")
 
-    nii_img = nib.load(local_nii_path)
+    nii_img = nib.load(nii_path_to_process)
     original_affine = nii_img.affine.copy()
     original_spacing = nii_img.header.get_zooms()[:3]  # (x, y, z)
     original_spacing_zyx = [original_spacing[2], original_spacing[1], original_spacing[0]]
@@ -574,13 +627,23 @@ def preprocess_single_file(
 
     size_mb = save_npz(volume_int16, metadata, npz_path)
 
+    # Cleanup source file if needed
+    if need_cleanup:
+        if VERBOSE:
+            print(f"   [10] Cleaning up source file...")
+        Path(nii_path_to_process).unlink()
+        if VERBOSE:
+            source_type = "local" if source_was_local else "downloaded"
+            print(f"      ✓ Deleted {source_type} file: {nii_path_to_process}")
+
     return {
         'study_id': study_id,
         'status': 'success',
         'npz_path': str(npz_path),
         'source_file': hf_file_path,
         'size_mb': size_mb,
-        'hu_stats': hu_stats
+        'hu_stats': hu_stats,
+        'source_was_local': source_was_local
     }
 
 
@@ -708,6 +771,11 @@ def main():
     print(f"Target spacing: {TARGET_SPACING}")
     print(f"Target shape: {TARGET_SHAPE}")
     print(f"HU clip range: [{HU_CLIP_MIN}, {HU_CLIP_MAX}]")
+    print(f"Delete source files: {DELETE_SOURCE_AFTER_CONVERSION}")
+
+    # Scan local nii.gz files (already downloaded)
+    local_source_dir = Path(LOCAL_SOURCE_DIRS[args.split])
+    local_files_map = scan_local_nii_files(local_source_dir)
 
     # List HF files
     hf_files = list_hf_files(args.split)
@@ -741,13 +809,27 @@ def main():
 
     print(f"\n🚀 Processing {len(files_to_process)} files...")
 
+    # Count how many files are available locally
+    local_available = 0
+    for hf_path in files_to_process:
+        study_id = extract_study_id(hf_path)
+        if study_id in local_files_map:
+            local_available += 1
+
+    print(f"   Files available locally: {local_available}/{len(files_to_process)}")
+    print(f"   Files to download: {len(files_to_process) - local_available}/{len(files_to_process)}")
+
     # Process files
     results = []
     for idx, hf_path in enumerate(files_to_process, 1):
         if not VERBOSE and idx % PROGRESS_INTERVAL == 0:
             print(f"   Progress: {idx}/{len(files_to_process)}")
 
-        result = preprocess_single_file(hf_path, output_dir, temp_dir)
+        # Check if local file exists
+        study_id = extract_study_id(hf_path)
+        local_path = local_files_map.get(study_id, None)
+
+        result = preprocess_single_file(hf_path, output_dir, temp_dir, local_path)
         results.append(result)
 
     # Generate manifest
@@ -756,12 +838,15 @@ def main():
     # Summary
     successful = [r for r in results if r['status'] == 'success']
     skipped = [r for r in results if r['status'] == 'skipped']
+    used_local = [r for r in successful if r.get('source_was_local', False)]
 
     print("\n" + "="*80)
     print("SUMMARY")
     print("="*80)
     print(f"Total processed: {len(results)}")
     print(f"Successful: {len(successful)}")
+    print(f"  - From local files: {len(used_local)}")
+    print(f"  - From HuggingFace: {len(successful) - len(used_local)}")
     print(f"Skipped (already exists): {len(skipped)}")
     print(f"Output directory: {output_dir}")
     print("="*80)

@@ -54,17 +54,28 @@ TARGET_ORIENTATION = "LPS"
 USE_NESTED_STRUCTURE = True
 
 # ============================================================================
+# Local Source Directories (Already Downloaded Files)
+# ============================================================================
+
+# Local directories containing already-downloaded nii.gz files
+# These will be used first before downloading from HuggingFace
+LOCAL_SOURCE_DIRS = {
+    'train': "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_fixed",
+    'valid': "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_fixed"
+}
+
+# ============================================================================
 # Download Settings
 # ============================================================================
 
-# Temporary directory for downloads
-# If None, will use system temp directory
+# Temporary directory for downloads from HuggingFace
+# (Only used if file not found in LOCAL_SOURCE_DIRS)
 TEMP_DIR = "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/temp_downloads"
 
-# Whether to keep downloaded nii.gz files after conversion
-# True: Keep for debugging
-# False: Delete after successful conversion
-KEEP_DOWNLOADED_FILES = True
+# Whether to delete source nii.gz files after successful conversion
+# True: Delete after processing (to save space)
+# False: Keep files
+DELETE_SOURCE_AFTER_CONVERSION = False
 
 # ============================================================================
 # Processing Settings
