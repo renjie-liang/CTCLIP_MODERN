@@ -45,15 +45,6 @@ STORAGE_DTYPE = "int16"
 TARGET_ORIENTATION = "LPS"
 
 # ============================================================================
-# Directory Structure
-# ============================================================================
-
-# Whether to organize NPZ files in subdirectories (patient/series structure)
-# True:  output/train_001/train_001_a_1.npz
-# False: output/train_001_a_1.npz
-USE_NESTED_STRUCTURE = True
-
-# ============================================================================
 # Local Source Directories (Already Downloaded Files)
 # ============================================================================
 
@@ -75,7 +66,7 @@ TEMP_DIR = "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/temp_downloads"
 # Whether to delete source nii.gz files after successful conversion
 # True: Delete after processing (to save space)
 # False: Keep files
-DELETE_SOURCE_AFTER_CONVERSION = False
+DELETE_SOURCE_AFTER_CONVERSION = True
 
 # ============================================================================
 # Processing Settings
@@ -85,8 +76,6 @@ DELETE_SOURCE_AFTER_CONVERSION = False
 # None = process all files
 MAX_FILES = None  # Set to 20 for initial testing
 
-# Random seed for sampling (if MAX_FILES is set)
-RANDOM_SEED = 42
 
 # Whether to skip existing NPZ files (resume capability)
 SKIP_EXISTING = True

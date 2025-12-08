@@ -42,7 +42,6 @@ from config_npz_conversion import (
     PAD_VALUE,
     STORAGE_DTYPE,
     TARGET_ORIENTATION,
-    USE_NESTED_STRUCTURE,
     LOCAL_SOURCE_DIRS,
     TEMP_DIR,
     DELETE_SOURCE_AFTER_CONVERSION,
@@ -477,11 +476,7 @@ def preprocess_single_file(
         print(f"{'='*80}")
 
     # Determine output path
-    if USE_NESTED_STRUCTURE:
-        patient_id = get_patient_id(study_id)
-        npz_path = output_dir / patient_id / f"{study_id}.npz"
-    else:
-        npz_path = output_dir / f"{study_id}.npz"
+    npz_path = output_dir / f"{study_id}.npz"
 
     # Skip if already exists
     if SKIP_EXISTING and npz_path.exists():
@@ -746,12 +741,6 @@ def main():
         default=None,
         help='Maximum number of files to process (for testing)'
     )
-    parser.add_argument(
-        '--random-seed',
-        type=int,
-        default=2025,
-        help='Random seed for sampling'
-    )
 
     args = parser.parse_args()
 
@@ -802,10 +791,7 @@ def main():
     # Apply max_files limit
     files_to_process = missing_files
     if args.max_files is not None:
-        random.seed(args.random_seed)
-        if len(files_to_process) > args.max_files:
-            files_to_process = random.sample(files_to_process, args.max_files)
-            print(f"\n⚠️  Limiting to {args.max_files} files for testing")
+        files_to_process = files_to_process[:args.max_files]
 
     print(f"\n🚀 Processing {len(files_to_process)} files...")
 
