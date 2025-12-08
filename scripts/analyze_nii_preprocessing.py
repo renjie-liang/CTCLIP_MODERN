@@ -24,12 +24,17 @@ def analyze_single_file(nii_path, base_dir=None):
         # Load NIfTI file
         nii_img = nib.load(str(nii_path))
 
-        # Get data array
+        # Get data array (header access is faster than get_fdata if we don't need pixel values)
+        # But we need min/max so we have to load data
         data = nii_img.get_fdata()
 
         # Get header information
-        header = nii_img.header
-        pixdim = header['pixdim'][1:4]  # [x_spacing, y_spacing, z_spacing]
+        pixdim = nii_img.header.get_zooms() # [x_spacing, y_spacing, z_spacing]
+        
+        # --- NEW: Get Orientation ---
+        # aff2axcodes return tuple like ('R', 'A', 'S') or ('L', 'P', 'S')
+        orientation = nib.aff2axcodes(nii_img.affine)
+        orientation_str = "".join(orientation) # e.g., "RAS", "LPS"
 
         # Extract statistics
         stats = {
@@ -38,6 +43,7 @@ def analyze_single_file(nii_path, base_dir=None):
             'shape': data.shape,
             'dtype': str(data.dtype),
             'spacing': tuple(pixdim),
+            'orientation': orientation_str,  # <--- Added
             'min_value': float(np.min(data)),
             'max_value': float(np.max(data)),
             'mean_value': float(np.mean(data)),
@@ -131,6 +137,16 @@ def main():
     print("AGGREGATE STATISTICS")
     print("="*80)
 
+    # --- NEW: Orientation Distribution ---
+    print("\n🧭 Orientation Distribution:")
+    orient_counts = defaultdict(int)
+    for s in all_stats:
+        orient_counts[s['orientation']] += 1
+    
+    for orient, count in sorted(orient_counts.items(), key=lambda x: -x[1]):
+        percentage = (count / len(all_stats)) * 100
+        print(f"   {orient}: {count} files ({percentage:.1f}%)")
+
     # Shape distribution
     print("\n📐 Shape Distribution:")
     shape_counts = defaultdict(int)
@@ -195,6 +211,15 @@ def main():
     print("PREPROCESSING INFERENCE")
     print("="*80)
 
+    # Check if uniform orientation
+    unique_orients = len(orient_counts)
+    if unique_orients == 1:
+        orient = list(orient_counts.keys())[0]
+        print(f"✅ UNIFORM ORIENTATION: All files are {orient}")
+    else:
+        print(f"⚠️  VARIABLE ORIENTATION: {unique_orients} different orientations detected")
+        print(f"   Main orientations: {dict(list(orient_counts.items())[:3])}")
+
     # Check if uniform spacing
     unique_spacings = len(spacing_counts)
     if unique_spacings == 1:
@@ -228,6 +253,12 @@ def main():
 
     preprocessing_done = []
     preprocessing_todo = []
+
+    if unique_orients == 1:
+        orient_val = list(orient_counts.keys())[0]
+        preprocessing_done.append(f"✅ Standardized orientation: {orient_val}")
+    else:
+        preprocessing_todo.append("❌ Need to standardize orientation (e.g. to RAS)")
 
     if unique_spacings == 1:
         spacing_val = list(spacing_counts.keys())[0]
@@ -264,6 +295,7 @@ def main():
 
     for i, stats in enumerate(all_stats[:5]):
         print(f"\n[{i+1}] {stats['relative_path']}")
+        print(f"    Orientation: {stats['orientation']}")  # <--- Show orientation
         print(f"    Shape: {stats['shape']}")
         print(f"    Spacing: {stats['spacing']}")
         print(f"    Dtype: {stats['dtype']}")

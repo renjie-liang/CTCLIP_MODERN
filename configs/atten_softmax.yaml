@@ -1,0 +1,151 @@
+# CT-CLIP Training - Base Configuration
+# Base configuration template for all experiments
+
+# Experiment information
+experiment:
+  name: "atten_softmax"
+  tags: ["atten", "softmax", "fulldataset"]
+  seed: 2025
+  notes: "Step-based training configuration"
+
+# Data configuration
+data:
+  # WebDataset format paths - PREPROCESSED data (no CPU processing needed)
+  # All volumes are already:
+  #   - Resized to uniform spacing (0.75mm x 0.75mm x 1.5mm)
+  #   - Normalized to [-1, 1] range
+  #   - Cropped/padded to (480, 480, 240)
+  #   - Saved as float16 for efficient I/O (~50-100ms load time per sample)
+  webdataset_shards_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/train_preprocessed_webdataset/shard-{000000..000316}.tar"
+  webdataset_shards_val: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/valid_preprocessed_webdataset/shard-{000000..000060}.tar"
+  shuffle_buffer_size: 100  # Buffer size for shuffling in WebDataset mode
+
+  reports_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/train_reports.csv"
+  reports_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/radiology_text_reports/validation_reports.csv"
+
+  train_meta: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/metadata/train_metadata.csv"
+  valid_meta: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/metadata/validation_metadata.csv"
+
+  labels_train: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/train_predicted_labels.csv"
+  labels_valid: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/multi_abnormality_labels/valid_predicted_labels.csv"
+
+  # DataLoader configuration
+  batch_size: 16
+  num_workers: 4  
+  prefetch_factor: 1  # Number of batches to prefetch per worker
+  persistent_workers: true  # Keep worker processes alive between epochs
+  use_embedding: false
+  embedding_dir: "/orange/xujie/liang.renjie/DATA/dataset/CT-RATE/dataset/embedding/author_ckpt"
+
+# Model configuration
+model:
+  # Image Encoder (CTViT)
+  image_encoder:
+    type: "CTViT"
+    dim: 512
+    codebook_size: 8192
+    image_size: 480
+    patch_size: 20
+    temporal_patch_size: 10
+    spatial_depth: 4
+    temporal_depth: 4
+    dim_head: 32
+    heads: 8
+
+    # Optimization flags (for ablation studies)
+    use_flash_attention: false  # true = FlashAttention, false = baseline Attention
+    use_rms_norm: false         # true = RMSNorm, false = LayerNorm
+    use_swiglu: false           # true = SwiGLU, false = GEGLU
+
+  # Text Encoder (BiomedBERT)
+  text_encoder:
+    type: "BiomedBERT"
+    path: "/orange/xujie/liang.renjie/DATA/weights/BiomedVLP-CXR-BERT-specialized"
+    do_lower_case: true
+
+  # CLIP configuration
+  clip:
+    dim_image: 294912
+    dim_text: 768
+    dim_latent: 512
+    extra_latent_projection: false
+    use_mlm: false
+    downsample_image_embeds: false
+    use_all_token_embeds: false
+
+    # Loss configuration
+    loss_type: 'softmax'  # 'softmax' (InfoNCE) or 'siglip' (sigmoid-based)
+    # Notes:
+    # - softmax: Standard CLIP InfoNCE loss, batch size dependent
+    # - siglip: SigLIP pairwise logistic loss, more batch size independent
+
+# Training configuration (epoch-based with step-level control)
+training:
+  # Primary: Epoch-based training (recommended for consistency across batch sizes)
+  max_epochs: 20  # Train for 20 epochs
+  max_steps: null  # If set, overrides max_epochs
+
+  # Steps will be auto-calculated as: max_epochs × (num_samples ÷ batch_size)
+  # Example: 20 epochs × (~29500 samples ÷ 4 batch_size) ≈ 147,500 steps
+
+  learning_rate: 1.25e-6
+  weight_decay: 0.01
+  gradient_accumulation_steps: 1
+  max_grad_norm: 0.5
+
+  # Checkpoint saving (epoch-based)
+  save_every_n_epochs: 0.5  # Save every 0.5 epoch (40 checkpoints for 20 epochs)
+  save_every_n_steps: null  # Alternative: specify exact steps
+
+  # Learning rate scheduling
+  warmup_epochs: null  # Alternative: specify epochs
+  warmup_steps: 1000   
+  min_lr_ratio: 0.01   # Minimum lr as ratio of initial lr
+
+# Validation configuration
+validation:
+  # Evaluation frequency (epoch-based)
+  eval_every_n_epochs: 1  # Evaluate every 0.5 epoch (40 evaluations for 20 epochs)
+  eval_every_n_steps: null  # Alternative: specify exact steps
+
+  eval_samples: null  # Validate on 200 samples for speed (null = all samples)
+  metrics: ["auroc", "auprc", "f1", "precision", "recall"]
+  use_bootstrap: false  # False for training, True for inference
+  threshold: 0.5
+
+# Checkpoint configuration
+checkpoint:
+  save_dir: "./saves/full/atten_softmax"
+  keep_last_n: 3
+  save_best: true
+  best_metric: "weighted_auroc"  # Options: 'weighted_auroc' (sample-weighted), 'macro_auroc' (class-balanced)
+  best_metric_mode: "max"
+
+# Logging configuration
+logging:
+  use_wandb: true
+  use_tensorboard: false
+  use_console: true
+
+  wandb:
+    project: "ctclip_full"
+    entity: null
+    mode: "online"
+    group: null
+    job_type: "train"
+
+  tensorboard:
+    log_dir: "./runs"
+
+  log_every_n_steps: 10
+
+  # Performance profiling (detailed breakdown every 100 steps)
+  # Shows: data loading, model forward (spatial/temporal), backward, optimizer
+  # Includes: GPU memory usage and GPU utilization
+  # Auto-enables model internal profiling when true
+  profile_timing: false
+
+# Device configuration
+device:
+  use_cuda: true
+  cuda_device: 0

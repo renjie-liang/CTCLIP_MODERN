@@ -686,7 +686,7 @@ def main():
     parser.add_argument(
         '--random-seed',
         type=int,
-        default=42,
+        default=2025,
         help='Random seed for sampling'
     )
 
