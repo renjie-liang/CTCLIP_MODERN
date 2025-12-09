@@ -29,7 +29,7 @@ import glob
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from data.load_ctreport_dataset import CTReportDataset
+from data.npz_loader import CTReportNPZDataset
 from data.webdataset_loader import CTReportWebDataset
 
 
@@ -44,7 +44,7 @@ def benchmark_npz_raw_io(npz_files, num_samples=100):
     times = []
     for npz_path in tqdm(npz_files, desc="Loading NPZ"):
         start = time.time()
-        data = np.load(npz_path, mmap_mode='r')["data"]
+        data = np.load(npz_path, mmap_mode='r')["volume"]
         _ = data.shape  # Force read metadata
         elapsed = time.time() - start
         times.append(elapsed)
@@ -61,16 +61,16 @@ def benchmark_npz_raw_io(npz_files, num_samples=100):
 
 
 def benchmark_npz_full_loading(data_cfg, mode='train', num_samples=100):
-    """Benchmark full NPZ loading with CTReportDataset (I/O + processing)."""
+    """Benchmark full NPZ loading with CTReportNPZDataset (I/O + processing)."""
     print("\n" + "="*80)
     print("NPZ - Full Loading Benchmark (I/O + processing)")
     print("="*80)
 
-    dataset = CTReportDataset(
-        data_folder=data_cfg['train_dir'],
-        reports_file=data_cfg['reports_train'],
-        meta_file=data_cfg['train_meta'],
-        labels=data_cfg['labels_train'],
+    dataset = CTReportNPZDataset(
+        data_folder=data_cfg['npz_dir'],
+        reports_file=data_cfg['reports_file'],
+        meta_file=data_cfg['meta_file'],
+        labels_file=data_cfg['labels_file'],
         mode=mode
     )
 
@@ -225,13 +225,13 @@ def main():
 
     # Benchmark 2: NPZ full loading
     data_cfg = {
-        'train_dir': args.npz_dir,
-        'reports_train': args.reports_file,
-        'train_meta': args.meta_file,
-        'labels_train': args.labels_file
+        'npz_dir': args.npz_dir,
+        'reports_file': args.reports_file,
+        'meta_file': args.meta_file,
+        'labels_file': args.labels_file
     }
     npz_full_avg, npz_full_total = benchmark_npz_full_loading(
-        data_cfg, num_samples=args.num_samples
+        data_cfg, mode='val', num_samples=args.num_samples
     )
 
     # Benchmark 3: WebDataset loading
